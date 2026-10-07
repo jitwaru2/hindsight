@@ -1,0 +1,122 @@
+{
+ "name": "synthetic-document",
+ "description": "Invented living document with dated entries, newest entry first: the latest entry stands, each earlier entry's position is an earlier, provisional state.",
+ "source": {
+  "kind": "document",
+  "document_id": "docs/example/coaching.md",
+  "strategy": "document",
+  "context": "Vault file: docs/example/coaching.md. Title: Coaching. Document date: 2025-05-21.",
+  "timestamp": "2025-05-21T12:00:00-04:00",
+  "content_sha256": "376f9b14a4a40e30cce79e14a67a7e5d5c5fded8c2bb059cbdc5411a34e47aa8"
+ },
+ "extraction": {
+  "instructions_version": "1",
+  "instructions_sha256": "f46e574fdd297d1da6d4b3e65358316a60c6af10ed1c34aa2d7af7e19fa94efe",
+  "model": "synthetic (hand-written in the form extraction produces)",
+  "run": "synthetic"
+ },
+ "chunks": [
+  {
+   "index": 0,
+   "text": "---\ntitle: Coaching\nupdated: 2025-05-21\n---\n# Coaching\n\n## 2025-05-20 - Rowan Ellis continuing every other Tuesday at 7am; the 2025-05-14 stop is contradicted\n\nMara chose every other Tuesday at 7am with Rowan Ellis. The 2025-05-14 entry below is contradicted, not formally replaced.\n\n## 2025-05-14 - sessions with Rowan Ellis stopped until the contract renews\n\nMara stopped sessions with Rowan Ellis until the contract renews.\n\n## 2025-05-02 - Rowan Ellis active again, weekly\n\nSessions with Rowan Ellis resumed, weekly on Thursday at 6pm.\n"
+  }
+ ],
+ "facts": [
+  {
+   "id": "f0",
+   "chunk_index": 0,
+   "text": "Mara Lindqvist chose to continue sessions with Rowan Ellis every other Tuesday at 7am, on 2025-05-20. | When: 2025-05-20 | Involving: Mara Lindqvist; Rowan Ellis",
+   "fact_type": "world",
+   "entities": [
+    "Rowan Ellis",
+    "Mara Lindqvist"
+   ]
+  },
+  {
+   "id": "f1",
+   "chunk_index": 0,
+   "text": "Rowan Ellis is a current coach of Mara Lindqvist, as of 2025-05-20. | When: 2025-05-20 | Involving: Mara Lindqvist; Rowan Ellis",
+   "fact_type": "world",
+   "entities": [
+    "Rowan Ellis",
+    "Mara Lindqvist"
+   ]
+  },
+  {
+   "id": "f2",
+   "chunk_index": 0,
+   "text": "As of 2025-05-21, the document notes that the 2025-05-14 stop is contradicted by the 2025-05-20 entry and not formally replaced. | When: 2025-05-21",
+   "fact_type": "world",
+   "entities": [
+    "Rowan Ellis",
+    "Mara Lindqvist"
+   ]
+  },
+  {
+   "id": "f3",
+   "chunk_index": 0,
+   "text": "As of 2025-05-14, Mara Lindqvist had stopped sessions with Rowan Ellis until the contract renews; this later changed. | When: 2025-05-14 | Involving: Mara Lindqvist; Rowan Ellis",
+   "fact_type": "world",
+   "entities": [
+    "Rowan Ellis",
+    "Mara Lindqvist"
+   ]
+  },
+  {
+   "id": "f4",
+   "chunk_index": 0,
+   "text": "As of 2025-05-02, Mara Lindqvist's sessions with Rowan Ellis were weekly on Thursday at 6pm; this later changed. | When: 2025-05-02 | Involving: Mara Lindqvist; Rowan Ellis",
+   "fact_type": "world",
+   "entities": [
+    "Rowan Ellis",
+    "Mara Lindqvist"
+   ]
+  }
+ ],
+ "expected": [
+  {
+   "subject": "Rowan Ellis",
+   "attribute": "coaching-status",
+   "description": "Whether Mara is seeing Rowan Ellis: the latest entry stands; the earlier stop is an earlier state.",
+   "claims": [
+    {
+     "fact": "f1",
+     "value": "current coach",
+     "provisional": false,
+     "stated_at": "2025-05-21T12:00:00-04:00",
+     "as_of": "2025-05-20"
+    },
+    {
+     "fact": "f3",
+     "value": "stopped until the contract renews",
+     "provisional": true,
+     "stated_at": "2025-05-21T12:00:00-04:00",
+     "as_of": "2025-05-14"
+    }
+   ],
+   "current": "f1"
+  },
+  {
+   "subject": "Rowan Ellis",
+   "attribute": "session-schedule",
+   "description": "When Mara meets Rowan Ellis.",
+   "claims": [
+    {
+     "fact": "f0",
+     "value": "every other Tuesday at 7am",
+     "provisional": false,
+     "stated_at": "2025-05-21T12:00:00-04:00",
+     "as_of": "2025-05-20"
+    },
+    {
+     "fact": "f4",
+     "value": "weekly on Thursday at 6pm",
+     "provisional": true,
+     "stated_at": "2025-05-21T12:00:00-04:00",
+     "as_of": "2025-05-02"
+    }
+   ],
+   "current": "f0"
+  }
+ ]
+}

@@ -30,9 +30,38 @@ declarations; the separate worker (`hindsight-worker`) needs the same variables 
 | `mcp` | `CortanaMcpExtension`: tools on the engine's `/mcp` (HSIGHT-6); none yet |
 | `tenant` | `CortanaTenantExtension`: the engine's default tenant plus our migrations and bank-scoped tables |
 | `migrations` | the Alembic branch `cortana` and the table names |
-| `rules`, `reconcile`, `structuring`, `gate` | filled by HSIGHT-5, HSIGHT-4 and HSIGHT-8 |
+| `extraction` | the versioned extraction instructions (`instructions.md`, `VERSION`) and the bank configuration that applies them |
+| `structuring` | the structuring fixtures' schema and loader (`structuring.fixtures`); the structuring call is HSIGHT-4's |
+| `rules`, `reconcile`, `gate` | filled by HSIGHT-5 and HSIGHT-8 |
 | `cli` | `hindsight-cortana` |
 | `verify_base` | the base check behind `hindsight-cortana verify-base` |
+
+## Extraction instructions
+
+Every new fact states one claim, names its subject, gives its value in full, words a state in the
+moment as provisional and a resolution as a resolution (specification 5.1). The engine carries this
+through its `custom` extraction mode: `retain_custom_instructions` replace its concise guidelines,
+and the rest of its prompt and its output schema stay as they are. The instructions name no person;
+the bank's retain missions say whose memory it is.
+
+Apply them with the engine's configuration API, `PATCH /v1/default/banks/<bank>/config` with
+`{"updates": hindsight_ext_cortana.extraction.bank_config_updates(<the bank's retain_strategies>)}`.
+A retain strategy that sets its own extraction mode overrides the bank's, so the updates switch
+every strategy that extracts with a model (`concise`, `verbose`) to `custom` and leave `chunks` and
+`verbatim` strategies alone. The production bank changes only at cut-over (HSIGHT-10).
+
+A change to `extraction/instructions.md` is a release: raise `VERSION`, re-pin the hash in
+`tests/test_extraction.py`, re-cut the structuring fixtures, and run the gate.
+
+## Structuring fixtures
+
+Fixture chunks, the facts the engine's dry-run extraction produced from them under the
+instructions, and the claims structuring must end with, in the form `structuring.fixtures` defines.
+This repository is public, so it carries only synthetic fixtures with invented names and facts
+(`tests/fixtures/structuring/`). Fixtures cut from real sessions and vault documents stay on the
+operator's machine, in `~/.cortana-legacy/hindsight/fixtures/structuring/` or the folder named by
+`HINDSIGHT_CORTANA_REAL_FIXTURES`; the suite checks them when the folder exists and skips, saying
+why, when it does not.
 
 ## Tables and migrations
 

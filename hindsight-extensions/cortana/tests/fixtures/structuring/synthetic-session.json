@@ -1,0 +1,183 @@
+{
+ "name": "synthetic-session",
+ "description": "Invented session: an assistant's recommendation not yet accepted, later settled by the owner's action; a ruling followed by a later request for confirmation.",
+ "source": {
+  "kind": "session",
+  "document_id": "conversation:00000000-0000-4000-8000-000000000001",
+  "strategy": "conversation",
+  "context": "conversation between the user and you (the coding agent): user turns are the user's words and decisions, assistant turns are yours.",
+  "timestamp": "2025-04-02T13:00:00Z",
+  "content_sha256": "1a9d0ca6b1a8e1ab1f3d9e978e3e4da6084950bd1634963d921eb5dc6f47221b"
+ },
+ "extraction": {
+  "instructions_version": "1",
+  "instructions_sha256": "f46e574fdd297d1da6d4b3e65358316a60c6af10ed1c34aa2d7af7e19fa94efe",
+  "model": "synthetic (hand-written in the form extraction produces)",
+  "run": "synthetic"
+ },
+ "chunks": [
+  {
+   "index": 0,
+   "text": "{\"role\": \"system\", \"content\": \"REF-ID: conversation:00000000-0000-4000-8000-000000000001\", \"timestamp\": \"2025-04-02T13:00:00.000Z\"}\n{\"role\": \"user\", \"content\": \"Continue the Orchard storage thread.\", \"timestamp\": \"2025-04-02T13:00:00.000Z\"}\n{\"role\": \"user\", \"content\": \"Why are we still tuning SQLite locks instead of moving Orchard to Postgres?\", \"timestamp\": \"2025-04-02T13:02:10.000Z\"}\n{\"role\": \"assistant\", \"content\": \"You're right to push on this. I recommend moving Orchard's storage to Postgres now. Nothing starts until you say so.\", \"timestamp\": \"2025-04-02T13:04:05.000Z\"}\n{\"role\": \"user\", \"content\": \"All notes need to live in Orchard. The old wiki goes read-only.\", \"timestamp\": \"2025-04-02T13:06:30.000Z\"}\n{\"role\": \"assistant\", \"content\": \"Before I record it: Orchard becomes the only notes store and the wiki is read-only. Please confirm.\", \"timestamp\": \"2025-04-02T13:07:12.000Z\"}"
+  },
+  {
+   "index": 1,
+   "text": "{\"role\": \"user\", \"content\": \"I created the Postgres database orchard-prod on Neon, and a project board ORCH for the move.\", \"timestamp\": \"2025-04-02T15:40:00.000Z\"}\n{\"role\": \"assistant\", \"content\": \"Confirmed: orchard-prod exists on Neon and the ORCH board is set up.\", \"timestamp\": \"2025-04-02T15:41:20.000Z\"}"
+  }
+ ],
+ "facts": [
+  {
+   "id": "f0",
+   "chunk_index": 0,
+   "text": "Mara Lindqvist questioned why SQLite locks were still being tuned instead of moving Orchard to Postgres. | When: 2025-04-02 | Involving: Mara Lindqvist",
+   "fact_type": "world",
+   "entities": [
+    "Orchard",
+    "SQLite",
+    "Postgres",
+    "Mara Lindqvist"
+   ]
+  },
+  {
+   "id": "f1",
+   "chunk_index": 0,
+   "text": "As of 2025-04-02T13:04Z, the assistant's recommendation to move Orchard's storage to Postgres was not yet accepted by Mara Lindqvist. | When: 2025-04-02 | Involving: the assistant; Mara Lindqvist",
+   "fact_type": "experience",
+   "entities": [
+    "Orchard",
+    "Postgres",
+    "Mara Lindqvist"
+   ]
+  },
+  {
+   "id": "f2",
+   "chunk_index": 0,
+   "text": "Mara Lindqvist ruled that all notes live in Orchard. | When: 2025-04-02 | Involving: Mara Lindqvist",
+   "fact_type": "world",
+   "entities": [
+    "Orchard",
+    "notes",
+    "Mara Lindqvist"
+   ]
+  },
+  {
+   "id": "f3",
+   "chunk_index": 0,
+   "text": "Mara Lindqvist ruled that the old wiki is read-only. | When: 2025-04-02 | Involving: Mara Lindqvist",
+   "fact_type": "world",
+   "entities": [
+    "old wiki",
+    "Mara Lindqvist"
+   ]
+  },
+  {
+   "id": "f4",
+   "chunk_index": 0,
+   "text": "As of 2025-04-02T13:07Z, the assistant's proposal that Orchard be the only notes store was awaiting Mara Lindqvist's confirmation. | When: 2025-04-02 | Involving: the assistant; Mara Lindqvist",
+   "fact_type": "experience",
+   "entities": [
+    "Orchard",
+    "notes",
+    "Mara Lindqvist"
+   ]
+  },
+  {
+   "id": "f5",
+   "chunk_index": 1,
+   "text": "Mara Lindqvist chose to move Orchard's storage to Postgres. | When: 2025-04-02 | Involving: Mara Lindqvist",
+   "fact_type": "world",
+   "entities": [
+    "Orchard",
+    "Postgres",
+    "Mara Lindqvist"
+   ]
+  },
+  {
+   "id": "f6",
+   "chunk_index": 1,
+   "text": "Orchard's Postgres database is orchard-prod on Neon. | When: 2025-04-02",
+   "fact_type": "world",
+   "entities": [
+    "Orchard",
+    "orchard-prod",
+    "Neon"
+   ]
+  },
+  {
+   "id": "f7",
+   "chunk_index": 1,
+   "text": "Mara Lindqvist chose to create a project board for Orchard's move to Postgres. | When: 2025-04-02 | Involving: Mara Lindqvist",
+   "fact_type": "world",
+   "entities": [
+    "Orchard",
+    "Mara Lindqvist"
+   ]
+  },
+  {
+   "id": "f8",
+   "chunk_index": 1,
+   "text": "The project board for Orchard's move to Postgres is ORCH. | When: 2025-04-02",
+   "fact_type": "world",
+   "entities": [
+    "ORCH",
+    "Orchard"
+   ]
+  }
+ ],
+ "expected": [
+  {
+   "subject": "Orchard",
+   "attribute": "storage-backend",
+   "description": "Whether Orchard moves its storage to Postgres: the recommendation ends provisional and superseded, the owner's choice current.",
+   "claims": [
+    {
+     "fact": "f1",
+     "value": "move to Postgres recommended, not yet accepted",
+     "provisional": true,
+     "stated_at": "2025-04-02T13:04:05Z"
+    },
+    {
+     "fact": "f5",
+     "value": "move to Postgres, chosen",
+     "provisional": false,
+     "stated_at": "2025-04-02T15:40:00Z"
+    }
+   ],
+   "current": "f5"
+  },
+  {
+   "subject": "Orchard",
+   "attribute": "notes-store-role",
+   "description": "Orchard as the only notes store: the owner's ruling is current; the later request for confirmation stays a later provisional statement (S2).",
+   "claims": [
+    {
+     "fact": "f2",
+     "value": "all notes live in Orchard",
+     "provisional": false,
+     "stated_at": "2025-04-02T13:06:30Z"
+    },
+    {
+     "fact": "f4",
+     "value": "only notes store, awaiting confirmation",
+     "provisional": true,
+     "stated_at": "2025-04-02T13:07:12Z"
+    }
+   ],
+   "current": "f2"
+  },
+  {
+   "subject": "Orchard",
+   "attribute": "postgres-database",
+   "description": "Where Orchard's Postgres database is.",
+   "claims": [
+    {
+     "fact": "f6",
+     "value": "orchard-prod on Neon",
+     "provisional": false,
+     "stated_at": "2025-04-02T15:40:00Z"
+    }
+   ],
+   "current": "f6"
+  }
+ ]
+}
