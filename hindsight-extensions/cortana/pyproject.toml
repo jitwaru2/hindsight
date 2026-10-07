@@ -1,0 +1,77 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+# Unlike upstream's extension folders, which exist only to run tests, this is a real
+# distribution: production installs it beside the engine from the fork's release tag,
+#   uv tool install hindsight-embed==0.10.2 \
+#     --with 'hindsight-api-slim[all] @ git+https://github.com/jitwaru2/hindsight@<tag>#subdirectory=hindsight-api-slim' \
+#     --with 'hindsight-ext-cortana @ git+https://github.com/jitwaru2/hindsight@<tag>#subdirectory=hindsight-extensions/cortana'
+[project]
+name = "hindsight-ext-cortana"
+# Follows the fork's release tags, v<upstream>-cortana.<n>.
+version = "0.10.2+cortana.1"
+description = "Cortana's extension to the Hindsight memory engine: claims, supersession, the current-state read and the evaluation gate"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+# Only what this package imports itself, and each one is already a runtime dependency of
+# hindsight-api-slim (tests/test_packaging.py holds that). Unpinned because the engine is
+# the host process: its pins decide the versions. hindsight-api-slim itself is not listed,
+# for the reason upstream gives in hindsight-extensions/README.md: an extension that
+# installs the server could move the server underneath the deployment it is added to.
+dependencies = [
+    "alembic",
+    "asyncpg",
+    "fastapi",
+    "fastmcp",
+    "typer",
+]
+
+[project.scripts]
+hindsight-cortana = "hindsight_ext_cortana.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["hindsight_ext_cortana"]
+
+[dependency-groups]
+# The test harness, run from this folder with `uv sync && uv run pytest`, as upstream's CI
+# runs its extensions. The engine comes from this checkout, with the local models and the
+# embedded PostgreSQL its fixtures need.
+dev = [
+    "hindsight-api-slim[all]",
+    "pytest>=9.0.0",
+    "pytest-asyncio>=1.3.0",
+    "pytest-env>=1.1.5",
+    "pytest-timeout>=2.4.0",
+    # The engine's pg0 fixtures take xdist's `worker_id`; the suite itself runs in one process.
+    "pytest-xdist>=3.8.0",
+    "python-dotenv>=1.2.1",
+    "filelock>=3.20.1",
+    "ruff>=0.8.0",
+]
+
+[tool.uv.sources]
+hindsight-api-slim = { path = "../../hindsight-api-slim", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The engine's source folder, so its fixtures (the package `tests`, loaded as a plugin by
+# tests/conftest.py) import. Our `tests` folder has no __init__.py, so it is not a package
+# and cannot shadow theirs.
+pythonpath = ["../../hindsight-api-slim"]
+addopts = "--timeout 300 -v"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+log_cli = true
+log_cli_level = "INFO"
+# The suite's own embedded PostgreSQL instance, separate from the engine's test instance
+# (hindsight-test on 5556), so our migration branch never lands in a database the engine's
+# own suite uses. D: sets a default that an explicit environment value overrides.
+env = [
+    "D:HINDSIGHT_API_DATABASE_URL=pg0://hindsight-ext-cortana-test:5557",
+    "HINDSIGHT_API_OPERATION_VALIDATOR_EXTENSION=hindsight_ext_cortana:CortanaOperationHooks",
+    "HINDSIGHT_API_HTTP_EXTENSION=hindsight_ext_cortana:CortanaHttpExtension",
+    "HINDSIGHT_API_MCP_EXTENSION=hindsight_ext_cortana:CortanaMcpExtension",
+    "HINDSIGHT_API_TENANT_EXTENSION=hindsight_ext_cortana:CortanaTenantExtension",
+]

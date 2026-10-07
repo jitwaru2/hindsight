@@ -1,12 +1,13 @@
 """Check that a checkout's package directory is byte-identical to an installed wheel.
 
-First form of ``hindsight-cortana verify-base``. It confirms the fork's base: every file
-the installed wheel's RECORD lists under the package (for example ``hindsight_api/``) must
+Behind ``hindsight-cortana verify-base``. It confirms the fork's base: every file the
+installed wheel's RECORD lists under the package (for example ``hindsight_api/``) must
 exist in the checkout's package directory with the same hash, and the checkout must hold
 no package file the RECORD lacks. ``__pycache__`` is ignored on both sides because
 bytecode is a local by-product, not part of the release.
 
-Run as a script until the package has a CLI:
+It uses only the standard library, so it also runs as a script under any Python 3.9 or
+later, without the engine installed:
 
     python3 -I verify_base.py <dist-info>/RECORD <checkout>/hindsight-api-slim/hindsight_api
 
