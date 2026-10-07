@@ -54,6 +54,7 @@ jobs:
         run: |
           uv run ruff check .
           uv run ruff format --check .
+          uv run deptry .
 
       - name: Cache HuggingFace models
         uses: actions/cache@v5

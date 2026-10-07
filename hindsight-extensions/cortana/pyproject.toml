@@ -15,16 +15,17 @@ description = "Cortana's extension to the Hindsight memory engine: claims, super
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
-# Only what this package imports itself, and each one is already a runtime dependency of
-# hindsight-api-slim (tests/test_packaging.py holds that). Unpinned because the engine is
-# the host process: its pins decide the versions. hindsight-api-slim itself is not listed,
+# Exactly what this package imports (deptry checks that), and each one is already a runtime
+# dependency of hindsight-api-slim (tests/test_packaging.py checks that). Unpinned because the
+# engine is the host process: its pins decide the versions. hindsight-api-slim itself is not listed,
 # for the reason upstream gives in hindsight-extensions/README.md: an extension that
 # installs the server could move the server underneath the deployment it is added to.
 dependencies = [
     "alembic",
-    "asyncpg",
     "fastapi",
     "fastmcp",
+    "pydantic",
+    "sqlalchemy",
     "typer",
 ]
 
@@ -49,7 +50,13 @@ dev = [
     "python-dotenv>=1.2.1",
     "filelock>=3.20.1",
     "ruff>=0.8.0",
+    "deptry>=0.23.0",
 ]
+
+[tool.deptry.per_rule_ignores]
+# The engine is the host process that imports this package, deliberately not a dependency.
+DEP001 = ["hindsight_api"]
+DEP003 = ["hindsight_api"]
 
 [tool.uv.sources]
 hindsight-api-slim = { path = "../../hindsight-api-slim", editable = true }

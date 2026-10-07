@@ -60,7 +60,7 @@ the local embedding and reranking models, and the `mock` LLM provider. Nothing c
 ```bash
 cd hindsight-extensions/cortana
 uv sync
-uv run ruff check . && uv run ruff format --check .
+uv run ruff check . && uv run ruff format --check . && uv run deptry .
 uv run pytest
 ```
 
