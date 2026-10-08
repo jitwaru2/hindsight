@@ -10,9 +10,14 @@ Loaded from ``HINDSIGHT_API_OPERATION_VALIDATOR_EXTENSION=hindsight_ext_cortana:
   asynchronously). Structuring runs here (HSIGHT-4, ``structuring.engine.structure_retain``): the
   retain's new facts become claims, one model call per batch through the engine's retain
   provider, and facts whose call fails are recorded ``structuring-pending`` in the ledger.
-  Supersession (HSIGHT-5) follows it here. The engine logs and swallows an exception raised in
-  this hook and skips it for a cancelled run, so anything it misses is repaired by reconciliation
-  (specification section 6.4).
+  Supersession follows it here (HSIGHT-5, ``reconcile.after_retain``): the pending keys among the
+  retain's claims are aligned, then every key the retain touched (its new claims' keys and its
+  documents' keys) is recomputed by the rules, and facts are retired, restored or re-reasoned
+  through the engine's curation path, with mental-model refreshes requested after a retirement.
+  A retain that stored no new facts (a re-save that only deleted chunks) still settles its
+  documents' keys, so S5 restores what a deleted superseder had superseded. The engine logs and
+  swallows an exception raised in this hook and skips it for a cancelled run, so anything it misses
+  is repaired by reconciliation (specification section 6.4).
 - ``on_recall_complete`` and ``on_reflect_complete`` write the retrieval log (HSIGHT-7).
 
 The engine calls ``on_startup`` and ``on_shutdown`` only for the tenant and HTTP extensions, not for
@@ -30,6 +35,7 @@ from hindsight_api.extensions import (
     ValidationResult,
 )
 
+from .reconcile import after_retain
 from .structuring.engine import structure_retain
 
 logger = logging.getLogger(__name__)
@@ -55,6 +61,8 @@ class CortanaOperationHooks(OperationValidatorExtension):
             result.success,
             result.request_context.internal,
         )
-        if not result.success or not any(result.unit_ids):
+        if not result.success:
             return
-        await structure_retain(self.context.get_memory_engine(), result)
+        engine = self.context.get_memory_engine()
+        report = await structure_retain(engine, result) if any(result.unit_ids) else None
+        await after_retain(engine, result, run_id=report.run_id if report else None)

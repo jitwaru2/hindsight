@@ -31,12 +31,25 @@ from uuid import UUID
 
 from hindsight_api.engine.schema import fq_table
 
+from ..supersession import settle
 from . import VERSION
 from .batching import Batch
 from .names import names_overlap, normalize_name
-from .records import BatchResult, Catalog, CatalogEntry, Chunk, Entity, FactInput, Source, SourceKind
+from .records import (
+    BatchResult,
+    Catalog,
+    CatalogEntry,
+    Chunk,
+    ClaimRow,
+    Entity,
+    FactInput,
+    Source,
+    SourceKind,
+    SourceRank,
+    StatedAtSource,
+)
 from .runner import RunReport, structure, structure_batch
-from .validation import ClaimAnswer, subject_names_to_resolve, validate
+from .validation import ClaimAnswer, content_hash, subject_names_to_resolve, validate
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +114,7 @@ class PgStore:
             return catalog
         async with (await self._pool()).acquire() as conn:
             rows = await conn.fetch(
-                f"SELECT subject_entity_id, attribute_key, description, example_value, merged_into "
+                f"SELECT subject_entity_id, attribute_key, description, example_value, merged_into, alignment "
                 f"FROM {fq_table('attributes')} WHERE bank_id = $1 AND subject_entity_id = ANY($2::uuid[])",
                 self.bank_id,
                 ids,
@@ -113,6 +126,7 @@ class PgStore:
                 description=row["description"],
                 example_value=row["example_value"],
                 merged_into=row["merged_into"],
+                alignment=row["alignment"],
             )
             catalog.setdefault(entry.subject_id, {})[entry.key] = entry
         return catalog
@@ -201,9 +215,9 @@ class PgStore:
                         id, bank_id, memory_unit_id, subject_entity_id, subject_text, attribute_key,
                         value_text, provisional, stated_at, document_order, chunk_index, fact_ordinal,
                         source_rank, document_id, chunk_id, source_kind, state, prompt_version, model,
-                        content_hash, stated_at_source
+                        content_hash, stated_at_source, keyed_as
                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-                              $18, $19, $20, $21)
+                              $18, $19, $20, $21, $22)
                     """,
                     [
                         (
@@ -228,6 +242,7 @@ class PgStore:
                             c.model,
                             c.content_hash,
                             str(c.stated_at_source),
+                            c.keyed_as or c.attribute_key,
                         )
                         for claim_id, c in zip(claim_ids, result.claims, strict=True)
                     ],
@@ -236,12 +251,20 @@ class PgStore:
                 await conn.executemany(
                     f"""
                     INSERT INTO {fq_table("attributes")}
-                        (bank_id, subject_entity_id, attribute_key, description, example_value, merged_into)
-                    VALUES ($1, $2, $3, $4, $5, $6)
+                        (bank_id, subject_entity_id, attribute_key, description, example_value, merged_into, alignment)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
                     ON CONFLICT (bank_id, subject_entity_id, attribute_key) DO NOTHING
                     """,
                     [
-                        (self.bank_id, a.subject_id, a.key, a.description, a.example_value, a.merged_into)
+                        (
+                            self.bank_id,
+                            a.subject_id,
+                            a.key,
+                            a.description,
+                            a.example_value,
+                            a.merged_into,
+                            new_key_alignment(a, result.claims),
+                        )
                         for a in result.new_attributes
                     ],
                 )
@@ -289,6 +312,82 @@ class PgStore:
             memory_unit_ids,
             json.dumps(details, default=str),
         )
+
+    async def rederive(self, facts: list[FactInput]) -> list[FactInput]:
+        """Copy claims to re-extracted facts; return the facts that still need the model.
+
+        A re-save deletes the facts of changed chunks and extracts them again under new ids
+        (design record 4.1). A new fact whose text has the same content hash as a vanished fact of
+        the same document (one in neither ``memory_units`` nor the archive) takes that fact's
+        claims, with its own position and, for a claim timed by the document's date, the new date;
+        the key, value, provisional flag and statement time otherwise carry over, so keys stay
+        stable and no model call is spent (requirement 9 of HSIGHT-5). The orphans are swept later.
+        """
+        wanted = {(f.source.document_id, content_hash(f.text)): f for f in facts if f.source.document_id}
+        if not wanted:
+            return facts
+        documents, hashes = zip(*wanted, strict=True)
+        async with (await self._pool()).acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT c.* FROM {fq_table("claims")} c
+                JOIN unnest($2::text[], $3::text[]) AS w(document_id, content_hash)
+                  ON c.document_id = w.document_id AND c.content_hash = w.content_hash
+                WHERE c.bank_id = $1
+                  AND NOT EXISTS (SELECT 1 FROM {fq_table("memory_units")} mu WHERE mu.id = c.memory_unit_id)
+                  AND NOT EXISTS (SELECT 1 FROM {fq_table("invalidated_memory_units")} im WHERE im.id = c.memory_unit_id)
+                ORDER BY c.created_at DESC, c.memory_unit_id
+                """,
+                self.bank_id,
+                list(documents),
+                list(hashes),
+            )
+        predecessor: dict[tuple[str, str], UUID] = {}
+        for row in rows:
+            predecessor.setdefault((row["document_id"], row["content_hash"]), row["memory_unit_id"])
+        copied: dict[UUID, list[ClaimRow]] = defaultdict(list)
+        origin: dict[str, str] = {}
+        by_fact = {f.id: f for f in facts}
+        for row in rows:
+            ident = (row["document_id"], row["content_hash"])
+            if predecessor.get(ident) != row["memory_unit_id"]:
+                continue
+            fact = by_fact[wanted[ident].id]
+            origin[str(fact.id)] = str(row["memory_unit_id"])
+            copied[fact.id].append(
+                ClaimRow(
+                    memory_unit_id=fact.id,
+                    subject_entity_id=row["subject_entity_id"],
+                    subject_text=row["subject_text"],
+                    attribute_key=row["attribute_key"],
+                    value_text=row["value_text"],
+                    provisional=row["provisional"],
+                    stated_at=fact.source.date if row["stated_at_source"] == "document-date" else row["stated_at"],
+                    document_order=fact.source.document_order,
+                    chunk_index=fact.chunk.index,
+                    fact_ordinal=fact.ordinal,
+                    source_rank=SourceRank(row["source_rank"]),
+                    document_id=fact.source.document_id,
+                    chunk_id=fact.chunk.chunk_id,
+                    source_kind=row["source_kind"],
+                    state="current",
+                    prompt_version=row["prompt_version"],
+                    model=row["model"],
+                    content_hash=row["content_hash"],
+                    stated_at_source=StatedAtSource(row["stated_at_source"] or "document-date"),
+                    keyed_as=row["keyed_as"],
+                )
+            )
+        if not copied:
+            return facts
+        done = [by_fact[fact_id] for fact_id in copied]
+        result = BatchResult(claims=[claim for fact_id in copied for claim in copied[fact_id]])
+        await self.write(
+            Batch(source=done[0].source, facts=done),
+            result,
+            {"run_id": str(uuid.uuid4()), "rederived_from": origin, "source": "content-hash"},
+        )
+        return [f for f in facts if f.id not in copied]
 
     async def facts_with_claims(self, fact_ids: list[UUID]) -> set[UUID]:
         async with (await self._pool()).acquire() as conn:
@@ -369,6 +468,19 @@ class PgStore:
         return inputs
 
 
+def new_key_alignment(entry: CatalogEntry, claims: list[ClaimRow]) -> str:
+    """A new catalog row's alignment: ``merged`` for an alias, ``pending`` when validation stored its
+    claims unaligned (a new key on a subject that had keys before the retain, or a subject that
+    resolves to no entity), else ``aligned`` (HSIGHT-5 decision 2)."""
+    if entry.merged_into:
+        return "merged"
+    unaligned = any(
+        c.state == "unaligned" and (c.subject_entity_id, c.attribute_key) == (entry.subject_id, entry.key)
+        for c in claims
+    )
+    return "pending" if unaligned else "aligned"
+
+
 @dataclass(frozen=True)
 class SourceHint:
     """What a retain item says about its document."""
@@ -413,6 +525,9 @@ async def structure_facts(
     if not todo:
         return None
     facts = await store.load_facts(todo, sources or {})
+    if not facts:
+        return None
+    facts = await store.rederive(facts)
     if not facts:
         return None
     model = model or await EngineModel.for_bank(engine, bank_id, request_context)
@@ -467,13 +582,15 @@ async def record_prestructured(
     *,
     kind: SourceKind = "decision",
     actor: str = "decision-tool",
+    request_context: Any = None,
 ) -> BatchResult:
     """Write claims that arrive already structured, without a model call (specification 5.3).
 
     The decision record's fact is stored by the engine first (chunks mode, no extraction); this
     validates the given claims exactly as a model's would be (subject resolution, key
     normalization, unaligned keys, ``same_as``), times them at ``stated_at`` with the decision
-    rank, and writes them. Supersession (HSIGHT-5) runs after it as after the hook.
+    rank, writes them, and settles their keys as the hook does after structuring (HSIGHT-5), so the
+    decision is current and what it supersedes is retired before this returns.
     """
     store = PgStore(engine, bank_id, actor=actor)
     (loaded,) = await store.load_facts([fact_id], {fact_id: SourceHint(event_date=stated_at)})
@@ -506,7 +623,14 @@ async def record_prestructured(
     if extra:
         catalog = {**catalog, **(await store.load_catalog(extra))}
     result = validate(batch, answers, catalog, resolved, bank_id=bank_id, prompt_version=None, model=None)
-    await store.write(batch, result, {"run_id": str(uuid.uuid4()), "source": kind})
+    run_id = uuid.uuid4()
+    await store.write(batch, result, {"run_id": str(run_id), "source": kind})
+    if request_context is None:
+        from hindsight_api import RequestContext
+
+        request_context = RequestContext(internal=True)
+    keys = {claim.key for claim in result.claims}
+    await settle(engine, bank_id, keys, request_context=request_context, actor=actor, run_id=run_id)
     return result
 
 

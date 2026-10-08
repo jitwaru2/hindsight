@@ -8,7 +8,8 @@ from typing import Literal
 from uuid import UUID
 
 SourceKind = Literal["session", "document", "decision", "correction"]
-ClaimState = Literal["current", "superseded", "unaligned"]
+ClaimState = Literal["current", "superseded", "unaligned", "provisional", "conflict"]
+Alignment = Literal["pending", "aligned", "merged"]
 
 
 class SourceRank(IntEnum):
@@ -95,13 +96,15 @@ class FactInput:
 
 @dataclass(frozen=True)
 class CatalogEntry:
-    """One row of the attributes catalog."""
+    """One row of the attributes catalog. ``alignment`` is ``pending`` for a key whose claims stay
+    unaligned until the alignment pass or a merge resolves it (HSIGHT-5 decision 2)."""
 
     subject_id: UUID
     key: str
     description: str
     example_value: str | None = None
     merged_into: str | None = None
+    alignment: Alignment = "aligned"
 
 
 Catalog = dict[UUID, dict[str, CatalogEntry]]
@@ -130,6 +133,8 @@ class ClaimRow:
     model: str | None
     content_hash: str
     stated_at_source: StatedAtSource
+    # The key the structuring step named, before an alias or a merge moved the claim (``claims.keyed_as``).
+    keyed_as: str | None = None
 
     @property
     def key(self) -> tuple[UUID, str]:

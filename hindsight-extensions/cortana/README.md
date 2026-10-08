@@ -32,7 +32,13 @@ declarations; the separate worker (`hindsight-worker`) needs the same variables 
 | `migrations` | the Alembic branch `cortana` and the table names |
 | `extraction` | the versioned extraction instructions (`instructions.md`, `VERSION`) and the bank configuration that applies them |
 | `structuring` | the versioned structuring prompt (`prompt.md`, `VERSION`), batching, validation, the runner, the engine adapters `on_retain_complete` uses (`structuring.engine`), the structuring suite (`structuring.suite`) and the fixtures' schema and loader (`structuring.fixtures`) |
-| `rules`, `reconcile`, `gate` | filled by HSIGHT-5 and HSIGHT-8 |
+| `rules` | the supersession rules S1 to S11 as a pure function of a key's valid claims (HSIGHT-5) |
+| `supersession` | applying the rules: claim and key states, the ledger, and retirement, restoration and reason updates through the engine's `update_memory_unit`, with mental-model refresh requests |
+| `alignment` | the versioned alignment prompt (`prompt.md`, `VERSION`) and the pass that resolves keys pending alignment by merge or as distinct |
+| `merges` | attribute merges, their inverse, and marking a key distinct |
+| `ledger` | the append-only ledger's writer and its event names |
+| `reconcile` | `after_retain` (the hook's work after structuring) and `reconcile` for a subject, a document or the bank, with the orphan sweep |
+| `gate` | filled by HSIGHT-8 |
 | `cli` | `hindsight-cortana` |
 | `verify_base` | the base check behind `hindsight-cortana verify-base` |
 
@@ -131,6 +137,29 @@ A new revision goes in `versions/` with `down_revision` set to the current `cort
 engine has no `alembic.ini`; generate one with `alembic.command.revision`, configured as
 `hindsight_api.migrations` configures a run (core's `alembic` folder as the script location, core's
 `versions` and ours as version locations) and `head="cortana@head"`.
+
+## Supersession and reconciliation
+
+After structuring, `on_retain_complete` sweeps orphaned claims of the retain's documents, aligns the
+pending keys among the retain's claims, and settles every key the retain touched: the rules decide
+each claim's state, changed states are written with their ledger entries, and facts whose claims
+are all superseded are retired through the engine's curation path with the reason
+`superseded by <fact id> on <subject>/<attribute>, rule <id>` (restored with `state: valid` when a
+claim becomes valid again). Mental models citing a retired fact, or an observation the retirement
+deleted, are asked to refresh.
+
+The operator's commands open the engine from the profile's environment as `hindsight-worker` does
+(source the profile first; the server's worker runs what they queue):
+
+```
+hindsight-cortana reconcile --bank <id> --all          # or --subject <entity id or name>, --document <id>
+hindsight-cortana merge --bank <id> --subject <s> --key <k> --into <target>
+hindsight-cortana unmerge --bank <id> --subject <s> --key <k>
+```
+
+`reconcile` structures facts that have no claims and no answered structuring call, aligns pending
+keys, sweeps orphaned claims, settles every key in scope and writes a `reconciled` ledger entry only
+when something changed, so a second run writes nothing.
 
 ## Tests
 

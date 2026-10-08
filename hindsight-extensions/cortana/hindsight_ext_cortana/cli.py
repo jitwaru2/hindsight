@@ -1,11 +1,22 @@
 """``hindsight-cortana``: the operator's command for this package.
 
-``verify-base`` and ``suite structuring`` (HSIGHT-4) are here. ``reconcile`` (HSIGHT-5), ``gate`` (HSIGHT-8) and ``status``
-(HSIGHT-7) are added by the issues that build them.
+``verify-base``, ``suite structuring`` (HSIGHT-4), and ``reconcile``, ``merge`` and ``unmerge``
+(HSIGHT-5) are here. ``gate`` (HSIGHT-8) and ``status`` (HSIGHT-7) are added by the issues that
+build them.
+
+``reconcile``, ``merge`` and ``unmerge`` open the engine in this process the way the engine's
+``hindsight-worker`` does: from the ``HINDSIGHT_API_*`` environment (source the profile first),
+with the tenant and operation-hooks extensions loaded and no migrations run. Work the engine queues
+(consolidation, graph maintenance, mental-model refreshes) is written to its operations table for
+the server's worker, not run here.
 """
 
+import asyncio
+import json
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
+from uuid import UUID
 
 import typer
 
@@ -61,8 +72,6 @@ def suite_structuring_command(
     The provider and model come from the HINDSIGHT_API_* environment, as on the server (source the
     profile first). Exits 0 when every run meets the precision target, 1 otherwise.
     """
-    import asyncio
-
     from rich.console import Console
     from rich.table import Table
 
@@ -103,3 +112,116 @@ def suite_structuring_command(
     met = summary["meets_target"]
     console.print(f"target {PRECISION_TARGET}: {'met' if met else 'NOT met'}")
     raise typer.Exit(0 if met else 1)
+
+
+async def _with_engine(work: Callable[[Any], Awaitable[Any]]) -> Any:
+    from hindsight_api import MemoryEngine
+    from hindsight_api.engine.task_backend import WorkerTaskBackend
+    from hindsight_api.extensions import OperationValidatorExtension, TenantExtension, load_extension
+
+    engine = MemoryEngine(
+        run_migrations=False,
+        task_backend=WorkerTaskBackend(),
+        tenant_extension=load_extension("TENANT", TenantExtension),
+        operation_validator=load_extension("OPERATION_VALIDATOR", OperationValidatorExtension),
+    )
+    await engine.initialize()
+    try:
+        return await work(engine)
+    finally:
+        await engine.close()
+
+
+async def _subject_id(engine: Any, bank: str, subject: str) -> UUID:
+    """An entity id given as a UUID or as the entity's exact name (case-insensitive)."""
+    try:
+        return UUID(subject)
+    except ValueError:
+        pass
+    from hindsight_api.engine.schema import fq_table
+
+    async with (await engine._get_pool()).acquire() as conn:
+        rows = await conn.fetch(
+            f"SELECT id FROM {fq_table('entities')} WHERE bank_id = $1 AND LOWER(canonical_name) = LOWER($2)",
+            bank,
+            subject,
+        )
+    if len(rows) != 1:
+        raise typer.BadParameter(f"{subject!r} names {len(rows)} entities of bank {bank}; pass the entity id")
+    return rows[0]["id"]
+
+
+def _context() -> Any:
+    from hindsight_api import RequestContext
+
+    return RequestContext(internal=True)
+
+
+@app.command("reconcile")
+def reconcile_command(
+    bank: Annotated[str, typer.Option(help="the bank to reconcile")],
+    subject: Annotated[str | None, typer.Option(help="one subject: entity id or exact name")] = None,
+    document: Annotated[str | None, typer.Option(help="one document id")] = None,
+    all_: Annotated[bool, typer.Option("--all", help="the whole bank")] = False,
+) -> None:
+    """Recompute supersession from the claims and the facts' states (specification 6.4).
+
+    Structures facts that have no claims, aligns pending keys, sweeps orphaned claims, settles every
+    key in scope, and writes a ledger summary when anything changed. Prints the run's summary.
+    """
+    if sum(bool(x) for x in (subject, document, all_)) != 1:
+        raise typer.BadParameter("give exactly one of --subject, --document or --all")
+    from .reconcile import reconcile
+
+    async def work(engine: Any) -> dict:
+        subject_id = await _subject_id(engine, bank, subject) if subject else None
+        report = await reconcile(engine, bank, subject=subject_id, document=document, request_context=_context())
+        return report.summary()
+
+    typer.echo(json.dumps(asyncio.run(_with_engine(work)), indent=1, default=str))
+
+
+@app.command("merge")
+def merge_command(
+    bank: Annotated[str, typer.Option(help="the bank")],
+    subject: Annotated[str, typer.Option(help="entity id or exact name")],
+    key: Annotated[str, typer.Option(help="the key to merge")],
+    into: Annotated[str, typer.Option(help="the key it is the same attribute as")],
+    reason: Annotated[str, typer.Option(help="why, for the ledger")] = "operator merge",
+) -> None:
+    """Merge one attribute key of a subject into another (specification 6.3), then recompute both."""
+    asyncio.run(_with_engine(lambda engine: _merge(engine, bank, subject, key, into, reason, reverse=False)))
+
+
+@app.command("unmerge")
+def unmerge_command(
+    bank: Annotated[str, typer.Option(help="the bank")],
+    subject: Annotated[str, typer.Option(help="entity id or exact name")],
+    key: Annotated[str, typer.Option(help="the merged key to split back out")],
+    reason: Annotated[str, typer.Option(help="why, for the ledger")] = "operator reversal",
+) -> None:
+    """Reverse a merge by recording its inverse, then recompute both keys."""
+    asyncio.run(_with_engine(lambda engine: _merge(engine, bank, subject, key, None, reason, reverse=True)))
+
+
+async def _merge(
+    engine: Any, bank: str, subject: str, key: str, into: str | None, reason: str, *, reverse: bool
+) -> None:
+    import uuid
+
+    from .merges import MergeRefused, merge_key, reverse_merge
+    from .supersession import settle
+
+    subject_id = await _subject_id(engine, bank, subject)
+    run_id = uuid.uuid4()
+    try:
+        if reverse:
+            result = await reverse_merge(engine, bank, subject_id, key, actor="operator", reason=reason, run_id=run_id)
+        else:
+            result = await merge_key(
+                engine, bank, subject_id, key, into or "", actor="operator", reason=reason, run_id=run_id
+            )
+    except MergeRefused as refused:
+        raise typer.BadParameter(str(refused)) from refused
+    settled = await settle(engine, bank, result.keys, request_context=_context(), actor="operator", run_id=run_id)
+    typer.echo(json.dumps({"moved_claims": len(result.claim_ids), "settled": settled.summary()}, indent=1, default=str))

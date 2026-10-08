@@ -58,3 +58,9 @@ def test_a_path_that_is_not_a_record_is_a_usage_error(tmp_path):
     _, package = _install(tmp_path)
     result = CliRunner().invoke(app, ["verify-base", str(package / "__init__.py"), str(package)])
     assert result.exit_code == 2
+
+
+def test_reconcile_needs_exactly_one_scope():
+    result = CliRunner().invoke(app, ["reconcile", "--bank", "b", "--all", "--document", "d"])
+    assert result.exit_code != 0
+    assert "exactly one" in result.output

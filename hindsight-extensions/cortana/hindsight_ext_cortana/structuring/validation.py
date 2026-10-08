@@ -311,7 +311,7 @@ def validate(
         rows: list[ClaimRow] = []
         for claim in claims:
             value = claim.value.strip()
-            key = normalize_key(claim.attribute)
+            key = named = normalize_key(claim.attribute)
             if not value or not key or not claim.subject.strip():
                 result.issues.append(f"{fact_id}: dropped a claim without subject, attribute or value")
                 continue
@@ -345,6 +345,7 @@ def validate(
                     model=model,
                     content_hash=content_hash(fact.text),
                     stated_at_source=stated_source,
+                    keyed_as=named,
                 )
             )
         if rows:

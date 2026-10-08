@@ -137,7 +137,8 @@ async def test_the_hook_structures_a_plugin_save_into_claims(structuring_calls, 
 
     attributes = await conn.fetch("SELECT * FROM public.attributes WHERE bank_id = $1", bank)
     assert {row["attribute_key"] for row in attributes} == {"fence-color"}
-    (ledger,) = await conn.fetch("SELECT * FROM public.ledger WHERE bank_id = $1", bank)
+    # Supersession (HSIGHT-5) writes its own entries after the structuring one.
+    (ledger,) = await conn.fetch("SELECT * FROM public.ledger WHERE bank_id = $1 AND event = 'structured'", bank)
     assert (ledger["event"], ledger["actor"]) == ("structured", "hook")
     assert set(ledger["memory_unit_ids"]) == set(facts)
     assert set(ledger["claim_ids"]) == {row["id"] for row in claims}
@@ -165,7 +166,9 @@ async def test_structured_facts_are_not_structured_again(structuring_calls, cort
 
     assert await structure_facts(cortana_memory, bank, facts, RequestContext()) is None
     assert len(structuring_calls["calls"]) == calls
-    assert await conn.fetchval("SELECT count(*) FROM public.ledger WHERE bank_id = $1", bank) == 1
+    assert (
+        await conn.fetchval("SELECT count(*) FROM public.ledger WHERE bank_id = $1 AND event = 'structured'", bank) == 1
+    )
 
 
 async def test_reconciliation_can_structure_pending_facts(structuring_calls, cortana_client, cortana_memory, conn):
