@@ -15,16 +15,19 @@ description = "Cortana's extension to the Hindsight memory engine: claims, super
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
-# Exactly what this package imports (deptry checks that), and each one is already a runtime
-# dependency of hindsight-api-slim (tests/test_packaging.py checks that). Unpinned because the
-# engine is the host process: its pins decide the versions. hindsight-api-slim itself is not listed,
-# for the reason upstream gives in hindsight-extensions/README.md: an extension that
-# installs the server could move the server underneath the deployment it is added to.
+# Exactly what this package imports (deptry checks that). Each is a runtime dependency of
+# hindsight-api-slim, unpinned because the engine is the host process and its pins decide the
+# versions, except those in ADDED_DEPENDENCIES of tests/test_packaging.py, which the engine does not
+# carry (python-slugify, for attribute keys). hindsight-api-slim itself is not listed, for the reason
+# upstream gives in hindsight-extensions/README.md: an extension that installs the server could move
+# the server underneath the deployment it is added to.
 dependencies = [
     "alembic",
     "fastapi",
     "fastmcp",
     "pydantic",
+    "python-slugify>=9.1.3",
+    "rich",
     "sqlalchemy",
     "typer",
 ]

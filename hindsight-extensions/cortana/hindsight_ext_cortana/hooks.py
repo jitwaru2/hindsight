@@ -7,9 +7,12 @@ Loaded from ``HINDSIGHT_API_OPERATION_VALIDATOR_EXTENSION=hindsight_ext_cortana:
 - ``on_retain_complete`` runs after a retain's writes have committed and before the engine
   enqueues consolidation, once per retain, for the API's synchronous retains and for the
   worker's asynchronous ones (the plugin's session saves and the vault loader both arrive
-  asynchronously). Structuring (HSIGHT-4) and supersession (HSIGHT-5) run here. The engine logs
-  and swallows an exception raised in this hook and skips it for a cancelled run, so anything it
-  misses is repaired by reconciliation (specification section 6.4).
+  asynchronously). Structuring runs here (HSIGHT-4, ``structuring.engine.structure_retain``): the
+  retain's new facts become claims, one model call per batch through the engine's retain
+  provider, and facts whose call fails are recorded ``structuring-pending`` in the ledger.
+  Supersession (HSIGHT-5) follows it here. The engine logs and swallows an exception raised in
+  this hook and skips it for a cancelled run, so anything it misses is repaired by reconciliation
+  (specification section 6.4).
 - ``on_recall_complete`` and ``on_reflect_complete`` write the retrieval log (HSIGHT-7).
 
 The engine calls ``on_startup`` and ``on_shutdown`` only for the tenant and HTTP extensions, not for
@@ -26,6 +29,8 @@ from hindsight_api.extensions import (
     RetainResult,
     ValidationResult,
 )
+
+from .structuring.engine import structure_retain
 
 logger = logging.getLogger(__name__)
 
@@ -50,3 +55,6 @@ class CortanaOperationHooks(OperationValidatorExtension):
             result.success,
             result.request_context.internal,
         )
+        if not result.success or not any(result.unit_ids):
+            return
+        await structure_retain(self.context.get_memory_engine(), result)

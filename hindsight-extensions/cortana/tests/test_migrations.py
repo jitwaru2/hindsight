@@ -87,11 +87,17 @@ async def test_the_engines_bank_deletion_sweeps_our_tables(cortana_memory, conn)
         await cortana_memory.retain_async(bank, "Synthetic note for a bank-scope test.", request_context=context)
         await _insert_one_row_per_table(conn, bank)
 
+    # The retain's own hook may have written rows too (structuring's claims or ledger entries).
+    before = {
+        table: await conn.fetchval(f"SELECT count(*) FROM public.{table} WHERE bank_id = $1", kept) for table in TABLES
+    }
+    assert all(count >= 1 for count in before.values())
+
     await cortana_memory.delete_bank(doomed, request_context=context)
 
     for table in TABLES:
         assert await conn.fetchval(f"SELECT count(*) FROM public.{table} WHERE bank_id = $1", doomed) == 0, table
-        assert await conn.fetchval(f"SELECT count(*) FROM public.{table} WHERE bank_id = $1", kept) == 1, table
+        assert await conn.fetchval(f"SELECT count(*) FROM public.{table} WHERE bank_id = $1", kept) == before[table]
     await cortana_memory.delete_bank(kept, request_context=context)
 
 

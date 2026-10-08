@@ -31,7 +31,7 @@ declarations; the separate worker (`hindsight-worker`) needs the same variables 
 | `tenant` | `CortanaTenantExtension`: the engine's default tenant plus our migrations and bank-scoped tables |
 | `migrations` | the Alembic branch `cortana` and the table names |
 | `extraction` | the versioned extraction instructions (`instructions.md`, `VERSION`) and the bank configuration that applies them |
-| `structuring` | the structuring fixtures' schema and loader (`structuring.fixtures`); the structuring call is HSIGHT-4's |
+| `structuring` | the versioned structuring prompt (`prompt.md`, `VERSION`), batching, validation, the runner, the engine adapters `on_retain_complete` uses (`structuring.engine`), the structuring suite (`structuring.suite`) and the fixtures' schema and loader (`structuring.fixtures`) |
 | `rules`, `reconcile`, `gate` | filled by HSIGHT-5 and HSIGHT-8 |
 | `cli` | `hindsight-cortana` |
 | `verify_base` | the base check behind `hindsight-cortana verify-base` |
@@ -62,6 +62,58 @@ This repository is public, so it carries only synthetic fixtures with invented n
 operator's machine, in `~/.cortana-legacy/hindsight/fixtures/structuring/` or the folder named by
 `HINDSIGHT_CORTANA_REAL_FIXTURES`; the suite checks them when the folder exists and skips, saying
 why, when it does not.
+
+## Structuring
+
+After every retain, `on_retain_complete` turns the new facts into claims (specification 5.2):
+
+1. It reads the facts, their chunks and their entities (label entities left out), and skips facts
+   that already have claims.
+2. It packs them into calls, at most `MAX_FACTS_PER_CALL` facts and `MAX_CHUNKS_PER_CALL` chunks
+   each, whole chunks where possible (`structuring/batching.py` gives the reasons).
+3. For each call it shows the model the source (a session's numbered, timestamped turns or a
+   document's text), the attribute catalog of every subject the facts name, and the facts, and asks
+   for each fact's claims (`structuring/prompt.md`).
+4. The call goes through the engine's retain provider bound to the bank, with two retries.
+5. Code validates the answer (`structuring/validation.py`): subjects resolve to the fact's entities
+   or to existing entities (the engine's resolver, read-only); keys are normalized; a new key on a
+   subject that already has keys is `unaligned` unless `same_as` maps it; an earlier-state marker
+   makes a claim provisional; the statement-time tuple and the content hash are computed.
+6. It writes `claims`, new `attributes` and one `structured` ledger entry per call. A failed call,
+   or a fact the answer gave no valid claim, is a `structuring-pending` ledger entry for
+   reconciliation, which structures such facts with `structuring.engine.structure_facts`.
+
+Claims that arrive already structured, such as decision records (HSIGHT-6), go through
+`structuring.engine.record_prestructured`: the same validation, no model call, the decision's
+moment and rank.
+
+Statement time (`claims.stated_at`, with `stated_at_source` saying where it came from): a session
+claim takes the timestamp of the turn the model names, else the first timestamp of its chunk, else
+the session's start; a document claim takes the date of the dated entry it comes from, at noon US
+Eastern, else the document's stamped date; a decision takes its moment. The tuple's other elements
+are the item's position in the retain, the chunk index, the fact's position in its chunk (by
+`mentioned_at`), and the source rank (session 0, document 1, correction 2, decision 3).
+
+A change to `structuring/prompt.md` is a release: raise `VERSION`, re-pin the hash in
+`tests/test_structuring_batching.py`, and run the structuring suite.
+
+### The structuring suite
+
+Real model calls on the structuring fixtures, through the engine's retain provider configured from
+the `HINDSIGHT_API_*` environment, scored for precision on key and provisional flag (target 0.95),
+recall, statement time and key stability across runs:
+
+```bash
+cd ~/.hindsight/daemon-cwd   # never a repository: the model's working directory
+env $(grep -E '^HINDSIGHT_API_(LLM|RETAIN_LLM)_' ~/.hindsight/profiles/cortana-scratch.env | xargs) \
+  uv run --project <checkout>/hindsight-extensions/cortana hindsight-cortana suite structuring \
+  --fixtures ~/.cortana-legacy/hindsight/fixtures/structuring \
+  --fixtures <checkout>/hindsight-extensions/cortana/tests/fixtures/structuring \
+  --out <a folder outside the repository>
+```
+
+It exits 0 when every run meets the target. Its output holds claims about real data; keep it out of
+this repository.
 
 ## Tables and migrations
 
@@ -94,7 +146,8 @@ uv run pytest
 ```
 
 `.python-version` pins 3.14, production's interpreter. `.github/workflows/cortana.yml` runs the
-same steps on Python 3.11 (the development checkout's) and 3.14 for every push to `cortana`.
+same steps on Python 3.11 (the development checkout's) and 3.14 for every push to `cortana`. The
+structuring suite, which calls a model, is separate (see Structuring).
 
 ## A scratch server from the development checkout
 
@@ -109,7 +162,8 @@ uv pip install --python <checkout>/.venv/bin/python --editable <checkout>/hindsi
 
 `uv run` syncs inexactly, so the install survives every daemon start. A plain `uv sync` in the
 checkout is exact and removes it; repeat the install after one (HSIGHT-1's syncs used
-`--inexact`). Then put the four variables above in the scratch profile and start the daemon from
+`--inexact`), and after any pull that adds a dependency to this package (HSIGHT-4 added
+`python-slugify`, which the engine does not carry). Then put the four variables above in the scratch profile and start the daemon from
 the checkout as HSIGHT-1 documents.
 
 ## Production
