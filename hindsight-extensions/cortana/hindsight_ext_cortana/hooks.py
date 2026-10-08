@@ -18,7 +18,12 @@ Loaded from ``HINDSIGHT_API_OPERATION_VALIDATOR_EXTENSION=hindsight_ext_cortana:
   documents' keys, so S5 restores what a deleted superseder had superseded. The engine logs and
   swallows an exception raised in this hook and skips it for a cancelled run, so anything it misses
   is repaired by reconciliation (specification section 6.4).
-- ``on_recall_complete`` and ``on_reflect_complete`` write the retrieval log (HSIGHT-7).
+- ``on_recall_complete`` and ``on_reflect_complete`` write the retrieval log (HSIGHT-7,
+  ``retrievals``): one row per recall, including the recalls reflect makes through its tools and the
+  engine's own internal recalls (consolidation's), and one row per reflect with its tool trace and
+  cited ids. ``validate_reflect`` marks the reflect so its tool recalls carry its id. The engine
+  calls ``on_recall_complete`` for failed recalls too (the row records the error) but calls
+  ``on_reflect_complete`` only for a reflect that returned an answer.
 
 The engine calls ``on_startup`` and ``on_shutdown`` only for the tenant and HTTP extensions, not for
 this one, so nothing here may depend on them.
@@ -29,12 +34,15 @@ import logging
 from hindsight_api.extensions import (
     OperationValidatorExtension,
     RecallContext,
+    RecallResult,
     ReflectContext,
+    ReflectResultContext,
     RetainContext,
     RetainResult,
     ValidationResult,
 )
 
+from . import retrievals
 from .reconcile import after_retain
 from .structuring.engine import structure_retain
 
@@ -49,7 +57,20 @@ class CortanaOperationHooks(OperationValidatorExtension):
         return ValidationResult.accept()
 
     async def validate_reflect(self, ctx: ReflectContext) -> ValidationResult:
+        retrievals.begin_reflect(ctx.bank_id)
         return ValidationResult.accept()
+
+    async def on_recall_complete(self, result: RecallResult) -> None:
+        internal = bool(getattr(result.request_context, "internal", False))
+        reflect_id = retrievals.current_reflect(result.bank_id) if internal else None
+        row = retrievals.recall_row(result, reflect_id=reflect_id)
+        await retrievals.record(self.context.get_memory_engine(), row)
+
+    async def on_reflect_complete(self, result: ReflectResultContext) -> None:
+        reflect_id = retrievals.current_reflect(result.bank_id)
+        retrievals.end_reflect()
+        row = retrievals.reflect_row(result, reflect_id=reflect_id)
+        await retrievals.record(self.context.get_memory_engine(), row)
 
     async def on_retain_complete(self, result: RetainResult) -> None:
         logger.info(

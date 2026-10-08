@@ -1,10 +1,10 @@
 """``hindsight-cortana``: the operator's command for this package.
 
-``verify-base``, ``suite structuring`` (HSIGHT-4), and ``reconcile``, ``merge`` and ``unmerge``
-(HSIGHT-5) are here. ``gate`` (HSIGHT-8) and ``status`` (HSIGHT-7) are added by the issues that
-build them.
+``verify-base``, ``suite structuring`` (HSIGHT-4), ``reconcile``, ``merge`` and ``unmerge``
+(HSIGHT-5), and ``status`` and ``retrievals sweep`` (HSIGHT-7) are here. ``gate`` (HSIGHT-8) is
+added by the issue that builds it.
 
-``reconcile``, ``merge`` and ``unmerge`` open the engine in this process the way the engine's
+``reconcile``, ``merge``, ``unmerge``, ``status`` and ``retrievals sweep`` open the engine in this process the way the engine's
 ``hindsight-worker`` does: from the ``HINDSIGHT_API_*`` environment (source the profile first),
 with the tenant and operation-hooks extensions loaded and no migrations run. Work the engine queues
 (consolidation, graph maintenance, mental-model refreshes) is written to its operations table for
@@ -225,3 +225,48 @@ async def _merge(
         raise typer.BadParameter(str(refused)) from refused
     settled = await settle(engine, bank, result.keys, request_context=_context(), actor="operator", run_id=run_id)
     typer.echo(json.dumps({"moved_claims": len(result.claim_ids), "settled": settled.summary()}, indent=1, default=str))
+
+
+@app.command("status")
+def status_command(
+    bank: Annotated[str | None, typer.Option(help="one bank; every bank of the schema when omitted")] = None,
+) -> None:
+    """Print what GET /ext/cortana/status answers (specification 12), as JSON.
+
+    Exits 0 when the status lists no problems, 1 otherwise.
+    """
+    from .status import build_status
+
+    async def work(engine: Any) -> Any:
+        from hindsight_api import RequestContext
+
+        schema = (await engine.tenant_extension.authenticate(RequestContext())).schema_name
+        return await build_status(await engine._get_pool(), schema, bank_id=bank)
+
+    status = asyncio.run(_with_engine(work))
+    typer.echo(status.model_dump_json(indent=1))
+    raise typer.Exit(1 if status.problems else 0)
+
+
+retrievals_app = typer.Typer(help="The retrieval log (specification 12).", no_args_is_help=True)
+app.add_typer(retrievals_app, name="retrievals")
+
+
+@retrievals_app.command("sweep")
+def retrievals_sweep_command(
+    bank: Annotated[str | None, typer.Option(help="one bank; every bank when omitted")] = None,
+    days: Annotated[
+        int | None,
+        typer.Option(min=1, help="retention in days; default $HINDSIGHT_CORTANA_RETRIEVALS_RETENTION_DAYS, else 30"),
+    ] = None,
+) -> None:
+    """Delete retrieval log rows older than the retention. A whole-bank reconcile does this too."""
+    from . import retrievals
+
+    async def work(engine: Any) -> dict:
+        retention = days or retrievals.retention_days()
+        async with (await engine._get_pool()).acquire() as conn:
+            deleted = await retrievals.sweep(conn, bank_id=bank, days=retention)
+        return {"bank": bank, "retention_days": retention, "deleted": deleted}
+
+    typer.echo(json.dumps(asyncio.run(_with_engine(work)), indent=1))

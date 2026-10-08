@@ -26,7 +26,7 @@ declarations; the separate worker (`hindsight-worker`) needs the same variables 
 | Module | What it holds |
 | --- | --- |
 | `hooks` | `CortanaOperationHooks`: validators that accept unchanged; `on_retain_complete`, where structuring and supersession run (HSIGHT-4, HSIGHT-5); the retrieval log hooks (HSIGHT-7) |
-| `http` | `CortanaHttpExtension`: routes under `/ext/cortana/`; today `GET /ext/cortana/status` |
+| `http` | `CortanaHttpExtension`: routes under `/ext/cortana/`: `status`, `retrievals`, `ledger` (HSIGHT-7) |
 | `mcp` | `CortanaMcpExtension`: tools on the engine's `/mcp` (HSIGHT-6); none yet |
 | `tenant` | `CortanaTenantExtension`: the engine's default tenant plus our migrations and bank-scoped tables |
 | `migrations` | the Alembic branch `cortana` and the table names |
@@ -36,7 +36,9 @@ declarations; the separate worker (`hindsight-worker`) needs the same variables 
 | `supersession` | applying the rules: claim and key states, the ledger, and retirement, restoration and reason updates through the engine's `update_memory_unit`, with mental-model refresh requests |
 | `alignment` | the versioned alignment prompt (`prompt.md`, `VERSION`) and the pass that resolves keys pending alignment by merge or as distinct |
 | `merges` | attribute merges, their inverse, and marking a key distinct |
-| `ledger` | the append-only ledger's writer and its event names |
+| `ledger` | the append-only ledger's writer, its event names, and the query behind `GET /ext/cortana/ledger` |
+| `retrievals` | the retrieval log: rows built from the recall and reflect hooks, the write, the retention sweep and the query behind `GET /ext/cortana/retrievals` |
+| `status` | `build_status`, behind `GET /ext/cortana/status` and `hindsight-cortana status` |
 | `reconcile` | `after_retain` (the hook's work after structuring) and `reconcile` for a subject, a document or the bank, with the orphan sweep |
 | `gate` | filled by HSIGHT-8 |
 | `cli` | `hindsight-cortana` |
@@ -159,7 +161,52 @@ hindsight-cortana unmerge --bank <id> --subject <s> --key <k>
 
 `reconcile` structures facts that have no claims and no answered structuring call, aligns pending
 keys, sweeps orphaned claims, settles every key in scope and writes a `reconciled` ledger entry only
-when something changed, so a second run writes nothing.
+when something changed, so a second run writes nothing. A whole-bank run also deletes the bank's
+retrieval log rows past retention (see Observability).
+
+## Observability
+
+Specification section 12, built by HSIGHT-7.
+
+**Retrieval log.** `on_recall_complete` writes one `retrievals` row for every recall, including the
+recalls reflect makes through its tools and the engine's internal ones (consolidation's), and
+`on_reflect_complete` one row for every reflect that returned an answer (the engine calls no hook
+for a failed reflect; its recalls are still logged). A recall row holds the query, the caller as
+the request context shows it (never the API key), the parameters, and the ids returned in rank order
+with their scores; a failed recall holds the error. A reflect row holds every tool call in order
+with its input, reason and returned ids, and the ids the answer cited (`cited_ids`,
+`cited_mental_model_ids`). `reflect_id` links a reflect to the recalls it made. Rows are written
+synchronously in the hook; a failed write is logged and never fails the call.
+
+**Retention.** `HINDSIGHT_CORTANA_RETRIEVALS_RETENTION_DAYS`, default 30, because a wrong answer
+noticed within a month must be diagnosable from the record without re-running the call. A
+whole-bank `reconcile` deletes the bank's older rows; `hindsight-cortana retrievals sweep [--bank
+<id>] [--days <n>]` does it on demand for one bank or all.
+
+**Routes.** All newest first, filtered by query parameters, `limit` up to 1000:
+
+- `GET /ext/cortana/retrievals?bank_id=&kind=recall|reflect&since=&reflect_id=&limit=`
+- `GET /ext/cortana/ledger?bank_id=&subject=&attribute=&fact_id=&document=&since=&limit=`; `subject`
+  is an entity id or an exact name, and subject, attribute and document must hold for one claim
+- `GET /ext/cortana/status?bank_id=`: migrations and tables; facts without claims and pending
+  structuring; unaligned claims, pending keys, conflicts and stale-document markers; the last
+  reconciliation that changed something; `gate` (null until HSIGHT-8 records gate runs, shape
+  `status.GateRun`); fact retirements and restorations in the last day; the worker (in-process or
+  separate, the separate worker's liveness probe on `HINDSIGHT_API_WORKER_HTTP_PORT`, and the
+  operation queue); the retrieval log's rows and any past retention; and the check that `~/.env`
+  holds no `HINDSIGHT_` key. `problems` lists whatever is out of order.
+
+`hindsight-cortana status [--bank <id>]` prints the same JSON and exits 1 when `problems` is not
+empty.
+
+**Engine logging and the audit log** are configuration: `HINDSIGHT_API_LOG_FORMAT=json` for
+structured log lines, and `HINDSIGHT_API_AUDIT_LOG_ENABLED=true` with
+`HINDSIGHT_API_AUDIT_LOG_ACTIONS=reflect` so the engine keeps each reflect's raw request and response
+in its `audit_log` table, read through `GET /v1/default/banks/<bank>/audit-logs`.
+
+**Diagnosing a wrong answer:** find the reflect in `/ext/cortana/retrievals?kind=reflect`, read its
+tool calls and cited ids (and its recalls' scores with `reflect_id=`), look up each cited fact, and
+read `/ext/cortana/ledger?fact_id=` or `?subject=&attribute=` for its key.
 
 ## Tests
 

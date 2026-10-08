@@ -17,7 +17,10 @@ the facts' current states. In order it:
    (specification 4.2), recording each swept claim in the ledger;
 4. settles every key in scope;
 5. writes one ``reconciled`` ledger entry summarising the run, only when the run changed something,
-   so a second run over unchanged inputs writes nothing (S10, criterion 7).
+   so a second run over unchanged inputs writes nothing (S10, criterion 7);
+6. for a whole-bank run, deletes the bank's retrieval log rows older than the retention
+   (``retrievals.sweep``, HSIGHT-7). The count is in the run's summary but does not by itself make
+   the run one that changed something: the retrieval log is not supersession state.
 
 The engine offers no hook after a document is deleted, so restoration after a document deletion
 (criterion 6) happens at the next reconciliation of the document, its subjects or the bank.
@@ -31,7 +34,7 @@ from uuid import UUID
 
 from hindsight_api.engine.schema import fq_table
 
-from . import ledger
+from . import ledger, retrievals
 from .alignment import AlignmentModel, AlignReport, align
 from .structuring.engine import structure_facts
 from .structuring.runner import RunReport
@@ -81,6 +84,7 @@ class ReconcileReport:
     swept: int
     settled: SettleReport
     wrote_summary: bool
+    retrievals_swept: int = 0
 
     def summary(self) -> dict[str, Any]:
         structured = self.structured
@@ -101,6 +105,7 @@ class ReconcileReport:
             "swept_orphan_claims": self.swept,
             "settled": self.settled.summary(),
             "ledger_summary_written": self.wrote_summary,
+            "retrievals_swept": self.retrievals_swept,
         }
 
 
@@ -145,6 +150,9 @@ async def reconcile(
     settled = await settle(engine, bank_id, keys, request_context=request_context, actor=actor, run_id=run_id)
 
     report = ReconcileReport(run_id, scope, structured, aligned, swept, settled, wrote_summary=False)
+    if subject is None and document is None:
+        async with pool.acquire() as conn:
+            report.retrievals_swept = await retrievals.sweep(conn, bank_id=bank_id)
     changed = bool(
         (structured and (structured.claims or structured.pending)) or aligned.changed or swept or settled.changed
     )

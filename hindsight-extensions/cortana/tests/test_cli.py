@@ -64,3 +64,14 @@ def test_reconcile_needs_exactly_one_scope():
     result = CliRunner().invoke(app, ["reconcile", "--bank", "b", "--all", "--document", "d"])
     assert result.exit_code != 0
     assert "exactly one" in result.output
+
+
+def test_status_and_retrievals_sweep_are_commands():
+    for command in (["status", "--help"], ["retrievals", "sweep", "--help"]):
+        result = CliRunner().invoke(app, command)
+        assert result.exit_code == 0, result.output
+
+
+def test_retrievals_sweep_refuses_a_retention_under_one_day():
+    result = CliRunner().invoke(app, ["retrievals", "sweep", "--days", "0"])
+    assert result.exit_code == 2
