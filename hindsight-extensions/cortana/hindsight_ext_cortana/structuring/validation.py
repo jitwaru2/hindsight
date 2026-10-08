@@ -12,7 +12,9 @@ What the model proposes and what code decides:
   key. A new key on a subject that already had keys is ``unaligned`` unless ``same_as`` names one of
   the subject's keys, in which case the claim goes on that key and the new name is recorded as an
   alias of it (specification 3 principle 4, rule S9). New keys join the catalog so later calls see
-  them.
+  them. A decision record's key is never unaligned: new or pending, it is taken as distinct, because
+  the session chose it with the catalog in view. (Its subject is always an engine entity, because
+  the decision's retain names it, so a decision record is never unaligned at all.)
 - Provisional. The model's flag, or an earlier-state marker in the claim's own words: the fact's
   statement (the text before the engine's " | When:", " | Involving:" and reason parts) when the
   fact has one claim, or the claim's quote when the fact has several and the quote is found in the
@@ -317,6 +319,10 @@ def validate(
                 continue
             subject, is_entity = _resolve_subject(claim, fact, resolved, bank_id)
             key, state = _align_key(claim, key, subject, catalog, new_keys, had_keys, value, run_keys)
+            if fact.source.kind == "decision":
+                # A decision record's key is never unaligned: the session chose it with the subject's
+                # catalog in view (``cortana_subjects``), so a new key is distinct and counts at once.
+                state = "current"
             if not is_entity:
                 state = "unaligned"
                 result.issues.append(f"{fact_id}: subject {subject.name!r} resolves to no entity; stored unaligned")

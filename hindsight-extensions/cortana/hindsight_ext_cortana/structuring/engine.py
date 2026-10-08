@@ -31,6 +31,7 @@ from uuid import UUID
 
 from hindsight_api.engine.schema import fq_table
 
+from ..merges import mark_distinct
 from ..supersession import settle
 from . import VERSION
 from .batching import Batch
@@ -610,9 +611,11 @@ async def record_prestructured(
 
     The decision record's fact is stored by the engine first (chunks mode, no extraction); this
     validates the given claims exactly as a model's would be (subject resolution, key
-    normalization, unaligned keys, ``same_as``), times them at ``stated_at`` with the decision
-    rank, writes them, and settles their keys as the hook does after structuring (HSIGHT-5), so the
-    decision is current and what it supersedes is retired before this returns.
+    normalization, ``same_as``), times them at ``stated_at`` with the decision rank, writes them,
+    and settles their keys as the hook does after structuring (HSIGHT-5), so the decision is
+    current and what it supersedes is retired before this returns. A decision's key is never left
+    pending: a new key is created aligned and a pending one is marked distinct, because the session
+    chose it with the subject's catalog in view (``cortana_subjects``).
     """
     store = PgStore(engine, bank_id, actor=actor)
     (loaded,) = await store.load_facts([fact_id], {fact_id: SourceHint(event_date=stated_at)})
@@ -647,6 +650,20 @@ async def record_prestructured(
     result = validate(batch, answers, catalog, resolved, bank_id=bank_id, prompt_version=None, model=None)
     run_id = run_id or uuid.uuid4()
     await store.write(batch, result, {"run_id": str(run_id), "source": kind})
+    if kind == "decision":
+        for claim in result.claims:
+            entry = catalog.get(claim.subject_entity_id, {}).get(claim.attribute_key)
+            if entry is not None and entry.alignment == "pending":
+                await mark_distinct(
+                    engine,
+                    bank_id,
+                    claim.subject_entity_id,
+                    claim.attribute_key,
+                    actor=actor,
+                    reason="a decision was recorded on it with the subject's keys in view",
+                    run_id=run_id,
+                    subject_text=claim.subject_text,
+                )
     if request_context is None:
         from hindsight_api import RequestContext
 

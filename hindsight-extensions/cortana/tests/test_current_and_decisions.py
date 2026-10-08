@@ -187,12 +187,18 @@ async def test_criterion_2_a_decision_is_current_within_the_call_supersedes_and_
     assert 'previous position "east" (session, 2026-09-25 10:00 EDT)' in key["summary"]
 
 
-async def test_a_decision_on_a_new_key_of_a_known_subject_is_pending_alignment(model, cortana_client, conn):
+async def _alignment(conn, bank: str, key: str) -> str:
+    return await conn.fetchval(
+        "SELECT alignment FROM public.attributes WHERE bank_id = $1 AND attribute_key = $2", bank, key
+    )
+
+
+async def test_a_decision_on_a_new_key_of_a_known_subject_is_current_at_once(model, cortana_client, conn):
     bank = _bank("newkey")
     await _session(
         cortana_client, bank, [("2026-10-01T10:00:00Z", "Kestrel's region is east.")], start="2026-10-01T10:00:00Z"
     )
-    result = await _decide(
+    first = await _decide(
         cortana_client,
         bank,
         words="We cap Kestrel at forty.",
@@ -200,10 +206,53 @@ async def test_a_decision_on_a_new_key_of_a_known_subject_is_pending_alignment(m
         value="40k",
         stated_at="2026-10-02T10:00:00Z",
     )
-    assert result["attribute"] == "funding-cap" and result["state"] == "unaligned"
-    assert "a new key on this subject, pending alignment, so it replaces nothing yet" in result["message"]
+    assert first["attribute"] == "funding-cap" and first["state"] == "current"
+    assert first["message"].endswith("no earlier position on this key.")
+    assert await _alignment(conn, bank, "funding-cap") == "aligned", "created distinct, never pending"
     read = await _current(cortana_client, bank, "Kestrel", "funding cap")
-    assert read["keys"][0]["status"] == "unaligned"
+    assert read["keys"][0]["status"] == "current" and read["keys"][0]["current"]["value"] == "40k"
+
+    second = await _decide(
+        cortana_client,
+        bank,
+        words="We raise Kestrel's cap to fifty.",
+        attribute="funding-cap",
+        value="50k",
+        stated_at="2026-10-03T10:00:00Z",
+    )
+    assert second["state"] == "current" and [s["value"] for s in second["superseded"]] == ["40k"]
+    assert await _archived(conn, first["fact_id"]), "the new key supersedes like any aligned key"
+    assert model["structuring"] == 1, "the decisions made no structuring call; the session made one"
+
+
+async def test_a_decision_on_a_pending_key_marks_it_distinct_and_supersedes_the_session_claim(
+    model, cortana_client, conn
+):
+    bank = _bank("pendingkey")
+    model["align_fail"] = RuntimeError("alignment unavailable")
+    await _session(
+        cortana_client, bank, [("2026-10-01T10:00:00Z", "Kestrel's region is east.")], start="2026-10-01T10:00:00Z"
+    )
+    await _session(
+        cortana_client, bank, [("2026-10-02T10:00:00Z", "Kestrel's host is beta.")], start="2026-10-02T10:00:00Z"
+    )
+    beta = (await _claims(conn, bank, "host"))["beta"]
+    assert beta["state"] == "unaligned" and await _alignment(conn, bank, "host") == "pending"
+
+    result = await _decide(
+        cortana_client,
+        bank,
+        words="Kestrel moves to the gamma host.",
+        attribute="host",
+        value="gamma",
+        stated_at="2026-10-03T10:00:00Z",
+    )
+    assert result["state"] == "current" and [s["value"] for s in result["superseded"]] == ["beta"]
+    assert await _alignment(conn, bank, "host") == "aligned"
+    assert (await _claims(conn, bank, "host"))["beta"]["state"] == "superseded"
+    assert await _archived(conn, beta["memory_unit_id"])
+    events = await _events(conn, bank)
+    assert events.index("attribute-aligned") < events.index("decision-recorded")
 
 
 async def test_a_decision_strategy_that_is_not_verbatim_is_refused(cortana_memory, cortana_client):

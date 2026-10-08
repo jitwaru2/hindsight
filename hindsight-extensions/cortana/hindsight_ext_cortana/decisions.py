@@ -9,7 +9,9 @@
    entity resolution links the fact to it. The hook recognises the strategy and does not structure it.
 2. When the retain returns (its facts are committed and the hook has run), it records the claim from
    the arguments with ``structuring.engine.record_prestructured``: the decision source kind and rank,
-   the statement time given (now by default), and supersession settled before it returns.
+   the statement time given (now by default), and supersession settled before it returns. The claim
+   counts at once even on a key new to the subject: the session chose the key with the subject's
+   catalog in view (``cortana_subjects``), so the key is created aligned, or marked distinct if pending.
 3. It returns the fact id, the key, and what the decision replaced, in one line a session can repeat
    to Josh ("Recorded as fact ... on Kestrel / region; it replaces the 2026-09-25 position ...").
 
@@ -177,16 +179,13 @@ def _phrase(item: Superseded) -> str:
     return phrase(item.value, item.source, item.stated_at, item.document_id)
 
 
-def message(result: DecisionResult, *, new_key_pending: bool) -> str:
+def message(result: DecisionResult) -> str:
     """The one line a session repeats to Josh."""
     head = "Recorded" if result.recorded else "Already recorded"
     line = f"{head} as fact {result.fact_id} on {result.subject} / {result.attribute}"
     replaced = [s for s in result.superseded if s.rule != "S2"]
     settled = [s for s in result.superseded if s.rule == "S2"]
-    if result.state == "unaligned":
-        reason = "a new key on this subject" if new_key_pending else "a subject that is not yet an entity"
-        line += f"; it is {reason}, pending alignment, so it replaces nothing yet"
-    elif result.state == "superseded" and result.superseded_by is not None:
+    if result.state == "superseded" and result.superseded_by is not None:
         line += f"; a later statement remains the current position: {_phrase(result.superseded_by)}"
     elif result.state == "conflict":
         line += "; the key is now in conflict with " + ", ".join(_phrase(c) for c in result.conflict_with)
@@ -229,7 +228,7 @@ async def _result(
     if claim["state"] == "superseded" and claim["superseded_by"] is not None:
         later = await conn.fetchrow(f"SELECT * FROM {fq_table('claims')} WHERE id = $1", claim["superseded_by"])
     key = await conn.fetchrow(
-        f"SELECT conflict_claim_ids, stale_documents, alignment FROM {fq_table('attributes')} "
+        f"SELECT conflict_claim_ids, stale_documents FROM {fq_table('attributes')} "
         f"WHERE bank_id = $1 AND subject_entity_id = $2 AND attribute_key = $3",
         bank_id,
         claim["subject_entity_id"],
@@ -270,7 +269,7 @@ async def _result(
         conflict_with=[_superseded(row) for row in conflict],
         stale_documents=stale,
     )
-    result.message = message(result, new_key_pending=bool(key and key["alignment"] == "pending"))
+    result.message = message(result)
     return result
 
 
