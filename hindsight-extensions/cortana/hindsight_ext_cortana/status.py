@@ -7,7 +7,7 @@ one bank or (no bank given) every bank of the schema:
 - structuring: live world and experience facts without claims, and the facts pending structuring,
   which are those of them no structuring call has answered (``reconcile.unstructured_facts``'s
   definition: never structured, or left ``structuring-pending`` by a failed call; a fact the model
-  answered with no claim is counted without claims but not pending, S8);
+  answered with no claim, or a decision record's fact, is counted without claims but not pending, S8);
 - supersession: unaligned claims, keys pending alignment, keys in conflict and stale-document
   markers (S9, S11);
 - the last reconciliation and its counts: the newest ``reconciled`` ledger entry. A reconciliation
@@ -259,7 +259,8 @@ async def build_status(pool: Any, schema: str, *, bank_id: str | None = None) ->
                   AND NOT EXISTS (SELECT 1 FROM {t("claims")} c WHERE c.bank_id = mu.bank_id AND c.memory_unit_id = mu.id)
             )
             SELECT (SELECT count(*) FROM without) AS without_claims,
-                   (SELECT count(*) FROM without WHERE id NOT IN (SELECT id FROM answered)) AS pending
+                   (SELECT count(*) FROM without WHERE id NOT IN (SELECT id FROM answered)
+                      AND id NOT IN (SELECT id FROM {t("memory_units")} WHERE document_id LIKE 'decision:%')) AS pending
             """,
             *bank_args,
         )

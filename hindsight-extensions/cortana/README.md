@@ -25,9 +25,12 @@ declarations; the separate worker (`hindsight-worker`) needs the same variables 
 
 | Module | What it holds |
 | --- | --- |
-| `hooks` | `CortanaOperationHooks`: validators that accept unchanged; `on_retain_complete`, where structuring and supersession run (HSIGHT-4, HSIGHT-5); the retrieval log hooks (HSIGHT-7) |
-| `http` | `CortanaHttpExtension`: routes under `/ext/cortana/`: `status`, `retrievals`, `ledger` (HSIGHT-7) |
-| `mcp` | `CortanaMcpExtension`: tools on the engine's `/mcp` (HSIGHT-6); none yet |
+| `hooks` | `CortanaOperationHooks`: `validate_retain`'s pool scoping (HSIGHT-6); `on_retain_complete`, where structuring and supersession run (HSIGHT-4, HSIGHT-5); the retrieval log hooks (HSIGHT-7); `filter_mcp_tools`, narrowing `/mcp` to our three tools (HSIGHT-6) |
+| `http` | `CortanaHttpExtension`: routes under `/ext/cortana/`: `status`, `retrievals`, `ledger` (HSIGHT-7); `current`, `subjects`, `facts/<id>`, `decisions` (HSIGHT-6) |
+| `mcp` | `CortanaMcpExtension`: `cortana_current`, `cortana_subjects` and `cortana_record_decision` on the engine's `/mcp` (HSIGHT-6) |
+| `current` | the current-state read behind `current`, `subjects` and `facts/<id>` and their tools (HSIGHT-6) |
+| `decisions` | decision capture behind `POST /ext/cortana/decisions` and `cortana_record_decision` (HSIGHT-6) |
+| `pools` | pool scoping for documents that arrive without a pool (HSIGHT-6, closing COR-18) |
 | `tenant` | `CortanaTenantExtension`: the engine's default tenant plus our migrations and bank-scoped tables |
 | `migrations` | the Alembic branch `cortana` and the table names |
 | `extraction` | the versioned extraction instructions (`instructions.md`, `VERSION`) and the bank configuration that applies them |
@@ -163,6 +166,38 @@ hindsight-cortana unmerge --bank <id> --subject <s> --key <k>
 keys, sweeps orphaned claims, settles every key in scope and writes a `reconciled` ledger entry only
 when something changed, so a second run writes nothing. A whole-bank run also deletes the bank's
 retrieval log rows past retention (see Observability).
+
+## The current-state read and decision capture
+
+Specification sections 9 and 10.1, built by HSIGHT-6. Every route takes `bank_id`; the MCP tools use
+the connection's bank (`/mcp/<bank>/`).
+
+- `GET /ext/cortana/current?bank_id=&subject=&attribute=` (`cortana_current`): each key's current
+  claim with the fact's text (Josh's words for a decision record), later provisional statements, a
+  conflict's claims newest first, the documents that still say otherwise, and the superseded claims
+  newest first with their rules; `summary` says it in one line per key. A subject that matches
+  nothing, or a key with no claim, is "no position recorded". A query over `claims` joined with the
+  engine's facts and the key's catalog row: no model, no ranking.
+- `GET /ext/cortana/subjects?bank_id=&q=` (`cortana_subjects`): subjects whose name contains the
+  text, or that the engine's entity resolution maps it to, with their keys, current values and last
+  statement times.
+- `GET /ext/cortana/facts/<fact id>?bank_id=`: one fact's claims and their states.
+- `POST /ext/cortana/decisions?bank_id=` (`cortana_record_decision`): Josh's words verbatim, the
+  subject, key, value, statement time (now by default), session id and domain. It retains one
+  document `decision:<operation id>` under the bank's `decision` strategy (extraction mode `chunks`:
+  no model call, the words are the fact), tagged `source:decision`, `domain:<d>` and the domain's
+  pool; records the claim from the arguments with the decision rank; settles the key; and answers
+  in one line naming the fact, the key and what it replaced. The same words, subject, key and time
+  record nothing new. A bank without a `decision` strategy gets one the first time; one configured
+  with another extraction mode is refused.
+
+A later claim that is not itself a decision record, with the same value as a standing decision
+record, is superseded by it as a restatement (the S3 exception in `rules`), so the session's own
+save of the words, or a document edited to agree, never retires Josh's verbatim record.
+
+`/mcp` exposes only these three tools (`filter_mcp_tools`); the plugin's stdio server keeps recall
+and reflect. Documents that arrive without a `pool:` tag get the pool of their `domain:` tag, or
+`general`, with that pool as their observation scope; tagged saves are left as they came.
 
 ## Observability
 

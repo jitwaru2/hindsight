@@ -60,12 +60,25 @@ STRUCTURING_MAX_RETRIES = 2
 
 OPERATION = "cortana-structuring"
 CORRECTION_PREFIX = "Correction:"
+# A decision record (specification 10.1): retained by the decision tool under this strategy, whose
+# extraction mode is ``chunks``, with this tag and document id prefix. Its claim comes from the tool's
+# arguments, never from the model (HSIGHT-6, brief decision 2).
+DECISION_STRATEGY = "decision"
+DECISION_TAG = "source:decision"
+DECISION_PREFIX = "decision:"
+
+
+def is_decision_item(item: dict) -> bool:
+    """Whether a retain item is a decision record, which structuring leaves to the decision tool."""
+    return item.get("strategy") == DECISION_STRATEGY or DECISION_TAG in (item.get("tags") or [])
 
 
 def source_kind(document_id: str | None, content: str) -> SourceKind:
-    """A plugin session save, a correction document (specification 5.3), or a document."""
+    """A plugin session save, a decision record, a correction document (specification 5.3), or a document."""
     if document_id and document_id.startswith("conversation:"):
         return "session"
+    if document_id and document_id.startswith(DECISION_PREFIX):
+        return "decision"
     if content.lstrip().startswith(CORRECTION_PREFIX):
         return "correction"
     return "document"
@@ -181,6 +194,11 @@ class PgStore:
             probed = await asyncio.create_task(self._probe_resolver(remaining, nearby))
             resolved.update(probed)
         return resolved
+
+    async def probe_entities(self, names: list[str]) -> dict[str, Entity | None]:
+        """Each name's existing entity by the engine's resolver alone, or ``None``; creates nothing.
+        The current-state read resolves a subject it cannot match by name this way (HSIGHT-6)."""
+        return await asyncio.create_task(self._probe_resolver(names, []))
 
     async def _probe_resolver(self, names: list[str], nearby: list[dict]) -> dict[str, Entity | None]:
         resolver = self.engine.entity_resolver
@@ -545,9 +563,12 @@ async def structure_facts(
 
 
 async def structure_retain(engine: Any, result: Any) -> RunReport | None:
-    """``on_retain_complete``'s work: structure the retain's new facts (specification 5.2)."""
+    """``on_retain_complete``'s work: structure the retain's new facts (specification 5.2). Decision
+    records are skipped: the decision tool records their claim from its arguments (5.3, 10.1)."""
     sources: dict[UUID, SourceHint] = {}
     for index, (item, unit_ids) in enumerate(zip(result.contents, result.unit_ids, strict=False)):
+        if is_decision_item(item):
+            continue
         hint = SourceHint(
             event_date=_event_date(item.get("event_date")),
             context=item.get("context") or "",
@@ -583,6 +604,7 @@ async def record_prestructured(
     kind: SourceKind = "decision",
     actor: str = "decision-tool",
     request_context: Any = None,
+    run_id: uuid.UUID | None = None,
 ) -> BatchResult:
     """Write claims that arrive already structured, without a model call (specification 5.3).
 
@@ -623,7 +645,7 @@ async def record_prestructured(
     if extra:
         catalog = {**catalog, **(await store.load_catalog(extra))}
     result = validate(batch, answers, catalog, resolved, bank_id=bank_id, prompt_version=None, model=None)
-    run_id = uuid.uuid4()
+    run_id = run_id or uuid.uuid4()
     await store.write(batch, result, {"run_id": str(run_id), "source": kind})
     if request_context is None:
         from hindsight_api import RequestContext
@@ -635,10 +657,14 @@ async def record_prestructured(
 
 
 __all__ = [
+    "DECISION_PREFIX",
+    "DECISION_STRATEGY",
+    "DECISION_TAG",
     "EngineModel",
     "PgStore",
     "PrestructuredClaim",
     "SourceHint",
+    "is_decision_item",
     "record_prestructured",
     "structure_batch",
     "structure_facts",

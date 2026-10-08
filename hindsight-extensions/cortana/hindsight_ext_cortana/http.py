@@ -8,8 +8,12 @@ caller's schema, decided by the engine's tenant extension as for the engine's ow
   supersession, reconciliation, the gate, the worker and the retrieval log (``status``; HSIGHT-7).
 - ``GET /ext/cortana/retrievals``: the retrieval log, newest first (``retrievals``; HSIGHT-7).
 - ``GET /ext/cortana/ledger``: the ledger, newest first (``ledger``; HSIGHT-7).
+- ``GET /ext/cortana/current``, ``GET /ext/cortana/subjects`` and ``GET /ext/cortana/facts/<fact id>``:
+  the current-state read (``current``; HSIGHT-6, specification 9).
+- ``POST /ext/cortana/decisions``: decision capture (``decisions``; HSIGHT-6, specification 10.1).
 
-The current-state, subject, fact and decision routes arrive with HSIGHT-6.
+The HSIGHT-6 routes act on one bank, named by the ``bank_id`` query parameter; the same reads and the
+decision write are the MCP tools of ``mcp``.
 """
 
 from datetime import datetime
@@ -22,7 +26,9 @@ from hindsight_api import MemoryEngine
 from hindsight_api.extensions import AuthenticationError, HttpExtension, RequestContext
 from pydantic import BaseModel
 
+from . import current as reads
 from . import ledger, retrievals
+from .decisions import DecisionError, DecisionRequest, DecisionResult, record_decision
 from .status import Status, build_status
 
 # Route limits: enough rows for a diagnosis session, small enough that one response stays readable.
@@ -88,7 +94,20 @@ class CortanaHttpExtension(HttpExtension):
             except AuthenticationError as error:
                 raise HTTPException(status_code=401, detail=error.reason) from error
 
+        async def caller(
+            credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+        ) -> tuple[RequestContext, str]:
+            """The caller's request context, authenticated as the engine authenticates its own routes, and
+            its schema (also set for the engine's ``fq_table``, which the decision write and the resolver use)."""
+            context = RequestContext(api_key=credentials.credentials if credentials else None)
+            try:
+                return context, await reads.schema_for(memory, context)
+            except AuthenticationError as error:
+                raise HTTPException(status_code=401, detail=error.reason) from error
+
         Schema = Annotated[str, Depends(tenant_schema)]
+        Caller = Annotated[tuple[RequestContext, str], Depends(caller)]
+        OneBank = Annotated[str, Query(min_length=1, description="the bank")]
         Bank = Annotated[str | None, Query(description="one bank; every bank of the schema when omitted")]
         Since = Annotated[datetime | None, Query(description="only rows recorded at or after this time (ISO 8601)")]
         Limit = Annotated[int, Query(ge=1, le=MAX_LIMIT)]
@@ -143,5 +162,44 @@ class CortanaHttpExtension(HttpExtension):
                     limit=limit,
                 )
             return Ledger(subject_ids=subject_ids, items=[LedgerEntry(**row) for row in rows])
+
+        @router.get("/current")
+        async def current_state(
+            caller: Caller,
+            bank_id: OneBank,
+            subject: Annotated[str, Query(min_length=1, description="entity name or id")],
+            attribute: Annotated[str | None, Query(description="attribute key; every key when omitted")] = None,
+        ) -> reads.CurrentState:
+            _, schema = caller
+            async with (await memory._get_pool()).acquire() as conn:
+                return await reads.current(memory, conn, schema, bank_id, subject, attribute)
+
+        @router.get("/subjects")
+        async def subject_search(
+            caller: Caller,
+            bank_id: OneBank,
+            q: Annotated[str, Query(min_length=1, description="part of a subject's name")],
+            limit: Limit = DEFAULT_LIMIT,
+        ) -> reads.Subjects:
+            _, schema = caller
+            async with (await memory._get_pool()).acquire() as conn:
+                return await reads.subjects(memory, conn, schema, bank_id, q, limit)
+
+        @router.get("/facts/{fact_id}")
+        async def fact_claims(caller: Caller, bank_id: OneBank, fact_id: UUID) -> reads.FactClaims:
+            _, schema = caller
+            async with (await memory._get_pool()).acquire() as conn:
+                found = await reads.fact(conn, schema, bank_id, fact_id)
+            if found is None:
+                raise HTTPException(status_code=404, detail=f"no fact {fact_id} in bank {bank_id}")
+            return found
+
+        @router.post("/decisions")
+        async def decision(caller: Caller, bank_id: OneBank, body: DecisionRequest) -> DecisionResult:
+            context, _ = caller
+            try:
+                return await record_decision(memory, bank_id, body, context)
+            except DecisionError as error:
+                raise HTTPException(status_code=error.status, detail=str(error)) from error
 
         return router

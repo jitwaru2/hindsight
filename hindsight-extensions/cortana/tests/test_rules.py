@@ -346,7 +346,8 @@ def test_criterion_17_the_stale_document_marker_stays_until_the_document_agrees(
 
     saved_agreeing = claim("saved", "red", 3, kind="document", document="docs/kestrel.md")
     outcome = evaluate_key([doc, decided, saved_agreeing])
-    assert by(outcome, decided) == ("superseded", saved_agreeing.id, "S3")
+    assert outcome.current == decided.id, "the S3 exception keeps the decision record current"
+    assert by(outcome, saved_agreeing) == ("superseded", decided.id, "S3")
     assert outcome.stale_documents == ()
 
 
@@ -377,6 +378,80 @@ def test_a_session_claim_supersedes_a_decision_record():
     decided = claim("decided", "red", 1, kind="decision")
     said = claim("said", "amber", 2)
     assert by(evaluate_key([decided, said]), decided) == ("superseded", said.id, "S1")
+
+
+# The S3 exception for decision records (HSIGHT-6) -----------------------------------------------------
+
+
+def test_a_later_session_restatement_never_supersedes_a_decision_record():
+    decided = claim("decided", "red", 1, kind="decision")
+    said = claim("said", "Red.", 2)
+    outcome = evaluate_key([decided, said])
+    assert outcome.current == decided.id
+    assert by(outcome, said) == ("superseded", decided.id, "S3")
+    retired = evaluate_facts(_fact_claims(outcome, decided, said), {decided.id: decided.fact_id, said.id: said.fact_id})
+    assert not retired[decided.fact_id].retired
+    assert retired[said.fact_id].reason == retirement_reason(decided.fact_id, "Kestrel", "status", "S3")
+
+
+def test_an_earlier_session_statement_of_the_same_words_is_superseded_by_the_decision_record():
+    said = claim("said", "red", 1)
+    decided = claim("decided", "red", 2, kind="decision")
+    outcome = evaluate_key([said, decided])
+    assert outcome.current == decided.id and by(outcome, said) == ("superseded", decided.id, "S3")
+
+
+def test_the_exception_applies_to_documents_and_corrections_too():
+    decided = claim("decided", "red", 1, kind="decision")
+    doc = claim("doc", "red", 2, kind="document", document="docs/kestrel.md")
+    fix = claim("fix", "red", 3, kind="correction", document="corrections/kestrel.md")
+    outcome = evaluate_key([decided, doc, fix])
+    assert outcome.current == decided.id
+    assert by(outcome, doc) == ("superseded", decided.id, "S3")
+    assert by(outcome, fix) == ("superseded", decided.id, "S3")
+
+
+def test_a_later_decision_record_restates_an_earlier_one_under_plain_s3():
+    first = claim("first", "red", 1, kind="decision")
+    again = claim("again", "red", 2, kind="decision")
+    outcome = evaluate_key([first, again])
+    assert outcome.current == again.id and by(outcome, first) == ("superseded", again.id, "S3")
+
+
+def test_a_later_claim_with_a_different_value_still_supersedes_a_decision_record():
+    decided = claim("decided", "red", 1, kind="decision")
+    restated = claim("restated", "red", 2)
+    changed = claim("changed", "amber", 3)
+    outcome = evaluate_key([decided, restated, changed])
+    assert outcome.current == changed.id
+    assert by(outcome, decided) == ("superseded", changed.id, "S1")
+    assert by(outcome, restated) == ("superseded", decided.id, "S3")
+
+
+def test_a_document_that_comes_round_to_the_decision_closes_its_conflict_and_the_decision_stays_current():
+    decided = claim("decided", "red", 1, kind="decision")
+    doc = claim("doc", "green", 2, kind="document", document="docs/kestrel.md")
+    assert evaluate_key([decided, doc]).conflict == (decided.id, doc.id)
+    edited = claim("edited", "red", 3, kind="document", document="docs/kestrel.md")
+    outcome = evaluate_key([decided, doc, edited])
+    assert outcome.conflict == () and outcome.current == decided.id
+    assert by(outcome, doc) == ("superseded", edited.id, "S1"), "the later entry still replaces the document's own"
+    assert by(outcome, edited) == ("superseded", decided.id, "S3")
+
+
+def test_the_exception_is_a_pure_function_of_the_claims_whatever_their_input_order():
+    claims = [
+        claim("doc", "green", 1, kind="document", document="docs/kestrel.md"),
+        claim("decided", "red", 2, kind="decision"),
+        claim("said", "red", 3),
+        claim("proposed", "amber", 6, provisional=True),
+        claim("doc2", "red", 5, kind="document", document="docs/kestrel.md"),
+    ]
+    first = evaluate_key(claims)
+    assert first.current == claims[1].id and first.stale_documents == ()
+    assert first.later_provisional == (claims[3].id,)
+    for order in itertools.permutations(claims):
+        assert evaluate_key(order) == first
 
 
 def test_decision_values_are_frozen_dataclasses():

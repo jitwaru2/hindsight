@@ -39,6 +39,16 @@ more than one standing claim remains the key is in conflict and has no single cu
 
 A stale-document marker stays on the key while the newest claim of that document on the key still
 disagrees with every standing claim, so a later save of the document that agrees clears it.
+
+The S3 exception for decision records (HSIGHT-6, brief decision 3; a proposed specification edit).
+A later claim that is not itself a decision record, with the same value as a standing decision
+record, never supersedes it: the later claim is superseded by the decision record as a restatement
+(S3) and the decision record stays the standing claim. Keeping Josh's verbatim words current is the
+point of decision capture; without this, the session's own save of the words he just recorded, or a
+document edited to agree, would retire the decision record's fact in favour of an extracted
+paraphrase. The later claim still acts on the other standing claims as it would otherwise (a later
+entry of a document still supersedes that document's earlier entry), so a conflict it resolves
+closes. A later decision record with the same value restates an earlier one under plain S3.
 """
 
 from collections import defaultdict
@@ -144,6 +154,12 @@ def _supersedes(earlier: RuleClaim, later: RuleClaim) -> bool:
     return False
 
 
+def _keeps_decision(earlier: RuleClaim, later: RuleClaim) -> bool:
+    """The S3 exception: a standing decision record is never superseded by a later restatement of
+    its value that is not itself a decision record."""
+    return earlier.kind == "decision" and later.kind != "decision" and same_value(earlier.value, later.value)
+
+
 def evaluate_key(claims: Iterable[RuleClaim], *, aligned: bool = True) -> KeyOutcome:
     """The state of every claim of one key (S1 to S3, S6, S9, S11).
 
@@ -161,7 +177,12 @@ def evaluate_key(claims: Iterable[RuleClaim], *, aligned: bool = True) -> KeyOut
     marked: set[str] = set()
     for later in (claim for claim in ordered if not claim.provisional):
         kept: list[RuleClaim] = []
+        restated_by: RuleClaim | None = None
         for earlier in standing:
+            if _keeps_decision(earlier, later):
+                restated_by = restated_by or earlier
+                kept.append(earlier)
+                continue
             if not _supersedes(earlier, later):
                 kept.append(earlier)
                 continue
@@ -169,7 +190,12 @@ def evaluate_key(claims: Iterable[RuleClaim], *, aligned: bool = True) -> KeyOut
             decisions[earlier.id] = Decision("superseded", later.id, "S3" if restated else "S1")
             if not restated and later.kind in AUTHORITATIVE and earlier.kind == "document" and earlier.document_id:
                 marked.add(earlier.document_id)
-        standing = [*kept, later]
+        if restated_by is not None:
+            # The S3 exception: the standing decision record absorbs the later restatement.
+            decisions[later.id] = Decision("superseded", restated_by.id, "S3")
+            standing = kept
+        else:
+            standing = [*kept, later]
 
     # S2: a provisional claim is superseded by the earliest later claim of any kind.
     for index, claim in enumerate(ordered):

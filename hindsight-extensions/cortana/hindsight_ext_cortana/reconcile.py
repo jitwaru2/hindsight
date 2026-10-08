@@ -181,7 +181,11 @@ async def _scope_keys(conn: Any, bank_id: str, subject: UUID | None, document: s
 async def unstructured_facts(
     conn: Any, bank_id: str, *, subject: UUID | None = None, document: str | None = None
 ) -> list[UUID]:
-    """Live world and experience facts in scope with no claims that no structuring call answered."""
+    """Live world and experience facts in scope with no claims that no structuring call answered.
+
+    A decision record's fact is never structured by the model (HSIGHT-6): its claim comes from the
+    decision tool, and a call interrupted before writing it is completed by repeating the call, which is
+    idempotent. So facts of ``decision:`` documents are left out."""
     filters, args = [], [bank_id]
     if document is not None:
         args.append(document)
@@ -200,6 +204,7 @@ async def unstructured_facts(
         )
         SELECT mu.id FROM {fq_table("memory_units")} mu
         WHERE mu.bank_id = $1 AND mu.fact_type IN ('world', 'experience') {" ".join(filters)}
+          AND (mu.document_id IS NULL OR mu.document_id NOT LIKE 'decision:%')
           AND NOT EXISTS (SELECT 1 FROM {fq_table("claims")} c WHERE c.bank_id = $1 AND c.memory_unit_id = mu.id)
           AND mu.id NOT IN (SELECT id FROM answered)
         ORDER BY mu.created_at, mu.id

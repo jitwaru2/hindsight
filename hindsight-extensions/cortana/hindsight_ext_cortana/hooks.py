@@ -2,14 +2,16 @@
 
 Loaded from ``HINDSIGHT_API_OPERATION_VALIDATOR_EXTENSION=hindsight_ext_cortana:CortanaOperationHooks``.
 
-- The ``validate_*`` hooks accept every operation unchanged. Pool scoping for documents that
-  arrive without a pool moves into ``validate_retain`` (HSIGHT-6).
+- ``validate_retain`` gives a document that arrives without a ``pool:`` tag the pool of its
+  ``domain:`` tag, or the default pool, with its observation scope (``pools``; HSIGHT-6,
+  specification 7.3, closing COR-18). The other ``validate_*`` hooks accept every operation unchanged.
 - ``on_retain_complete`` runs after a retain's writes have committed and before the engine
   enqueues consolidation, once per retain, for the API's synchronous retains and for the
   worker's asynchronous ones (the plugin's session saves and the vault loader both arrive
   asynchronously). Structuring runs here (HSIGHT-4, ``structuring.engine.structure_retain``): the
   retain's new facts become claims, one model call per batch through the engine's retain
-  provider, and facts whose call fails are recorded ``structuring-pending`` in the ledger.
+  provider, and facts whose call fails are recorded ``structuring-pending`` in the ledger. Decision
+  records are not structured: the decision tool records their claim from its arguments (HSIGHT-6).
   Supersession follows it here (HSIGHT-5, ``reconcile.after_retain``): the pending keys among the
   retain's claims are aligned, then every key the retain touched (its new claims' keys and its
   documents' keys) is recomputed by the rules, and facts are retired, restored or re-reasoned
@@ -25,6 +27,14 @@ Loaded from ``HINDSIGHT_API_OPERATION_VALIDATOR_EXTENSION=hindsight_ext_cortana:
   calls ``on_recall_complete`` for failed recalls too (the row records the error) but calls
   ``on_reflect_complete`` only for a reflect that returned an answer.
 
+- ``filter_mcp_tools`` narrows the engine's ``/mcp`` endpoint to our three tools
+  (``mcp.TOOLS``: ``cortana_current``, ``cortana_subjects``, ``cortana_record_decision``) on every bank
+  and in both modes. The plugin's own stdio MCP server already gives sessions recall and reflect through
+  the REST API, which this does not touch; upstream's ``retain``, ``delete_bank``, ``clear_memories``,
+  ``delete_document`` and the rest are hidden from tools/list and refused when called (HSIGHT-6). The
+  engine passes only its own tool names in ``tools``; returning ours replaces that set, and a bank's
+  ``mcp_enabled_tools``, when set, still narrows the result further.
+
 The engine calls ``on_startup`` and ``on_shutdown`` only for the tenant and HTTP extensions, not for
 this one, so nothing here may depend on them.
 """
@@ -37,12 +47,14 @@ from hindsight_api.extensions import (
     RecallResult,
     ReflectContext,
     ReflectResultContext,
+    RequestContext,
     RetainContext,
     RetainResult,
     ValidationResult,
 )
 
-from . import retrievals
+from . import pools, retrievals
+from .mcp import TOOLS as MCP_TOOLS
 from .reconcile import after_retain
 from .structuring.engine import structure_retain
 
@@ -51,7 +63,15 @@ logger = logging.getLogger(__name__)
 
 class CortanaOperationHooks(OperationValidatorExtension):
     async def validate_retain(self, ctx: RetainContext) -> ValidationResult:
-        return ValidationResult.accept()
+        scoped = pools.scope_contents(ctx.contents)
+        if scoped is None:
+            return ValidationResult.accept()
+        return ValidationResult.accept_with(contents=scoped)
+
+    async def filter_mcp_tools(
+        self, bank_id: str, request_context: RequestContext, tools: frozenset[str]
+    ) -> frozenset[str]:
+        return MCP_TOOLS
 
     async def validate_recall(self, ctx: RecallContext) -> ValidationResult:
         return ValidationResult.accept()
