@@ -12,7 +12,11 @@ one bank or (no bank given) every bank of the schema:
   markers (S9, S11);
 - the last reconciliation and its counts: the newest ``reconciled`` ledger entry. A reconciliation
   that changed nothing writes no entry (criterion 7), so this is the last one that changed something;
-- the last gate run and its table: ``null`` until HSIGHT-8 records gate runs (see ``GateRun``);
+- the last gate run and its table: the newest summary ``hindsight-cortana gate`` wrote to the gate folder
+  (``gate.runner.gate_dir``, the operating folder's ``ranking/``), or ``null`` when there is none. The
+  acceptance run uses a scratch bank restored from the dump, so the record lives beside the tables
+  rather than in any one database. A failed gate is reported here, not listed in ``problems``: it
+  blocks a release (specification 11), it is not a fault of the running server;
 - retirements and restorations of facts in the last day, from the ledger;
 - the worker's health: whether background work runs in this process or a separate
   ``hindsight-worker``, that worker's liveness probe, and the engine's operation queue;
@@ -73,9 +77,9 @@ class Reconciliation(BaseModel):
 
 
 class GateRun(BaseModel):
-    """The shape HSIGHT-8 fills for the newest gate run (specification 11): when it ran, against what,
-    whether it reached the target, where its table is in the operating folder's ``ranking/``, and its
-    per-suite results. Until HSIGHT-8 records gate runs, ``Status.gate`` is ``null``."""
+    """The newest gate run (specification 11): when it ran, against what, whether it reached the
+    target, where its table is in the operating folder's ``ranking/``, and its per-suite results (whether
+    each ran and passed, its one-line result, and the acceptance run's counts)."""
 
     ran_at: datetime
     release: str | None = Field(description="the fork release or commit the run tested")
@@ -161,6 +165,31 @@ class Status(BaseModel):
     problems: list[str]
 
 
+def last_gate_run(directory: Path | None = None) -> GateRun | None:
+    """The newest gate run's summary from the gate folder, as ``GateRun``; None when there is none or
+    it cannot be read."""
+    from .gate.runner import newest_run
+
+    run = newest_run(directory)
+    if run is None:
+        return None
+    try:
+        suites = {
+            name: {"ran": suite.get("ran"), "passed": suite.get("passed"), "result": suite.get("note")}
+            | ({"counts": suite.get("summary")} if name == "acceptance" else {})
+            for name, suite in run["suites"].items()
+        }
+        return GateRun(
+            ran_at=run["ran_at"],
+            release=run.get("release"),
+            passed=bool(run["passed"]),
+            table_path=run["table_path"],
+            suites=suites,
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def home_env_check(home: Path | None = None) -> HomeEnv:
     path = (home or Path.home()) / ".env"
     keys = sorted(k for k in dotenv_values(path) if k.startswith("HINDSIGHT_")) if path.is_file() else []
@@ -231,6 +260,7 @@ async def build_status(pool: Any, schema: str, *, bank_id: str | None = None) ->
         migrations=migrations,
         tables=tables,
         home_env=home_env,
+        gate=last_gate_run(),
     )
     if not migrations.current or not all(tables.values()):
         problems.append(f"migration branch {BRANCH} is at {applied}, head is {head}; missing tables are not read")

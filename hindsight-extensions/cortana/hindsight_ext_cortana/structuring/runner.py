@@ -65,24 +65,29 @@ class RunReport:
         return sum(len(result.claims) for result in self.results)
 
 
-async def structure_batch(
+async def candidate_catalog(
+    batch: Batch, store: Store, run_subjects: dict[UUID, Entity] | None = None
+) -> tuple[dict[UUID, Entity], Catalog]:
+    """The subjects a call is shown and their catalog: the facts' entities, existing subjects whose
+    names are variants of theirs, and the subjects earlier calls of the same retain gave claims to
+    (``run_subjects``), so a retain split into several calls keys its facts as one call would."""
+    subjects = batch.candidate_subjects() | (run_subjects or {})
+    subjects |= await store.related_subjects(subjects)
+    return subjects, await store.load_catalog(subjects)
+
+
+async def settle_answer(
     batch: Batch,
+    raw: Any,
+    catalog: Catalog,
     store: Store,
     model: StructuringModel,
     *,
     prompt_version: str,
     run_keys: frozenset[tuple[UUID, str]] = frozenset(),
-    run_subjects: dict[UUID, Entity] | None = None,
 ) -> BatchResult:
-    """One call: render with the catalog as it stands, ask, validate. Raises on a failed call.
-
-    The call is shown the catalog of the facts' entities, of existing subjects whose names are
-    variants of theirs, and of the subjects earlier calls of the same retain gave claims to
-    (``run_subjects``), so a retain split into several calls keys its facts as one call would."""
-    subjects = batch.candidate_subjects() | (run_subjects or {})
-    subjects |= await store.related_subjects(subjects)
-    catalog = await store.load_catalog(subjects)
-    raw = await model.answer(prompt(), render(batch, catalog, subjects))
+    """Validate a model's answer against ``catalog``: parse it, resolve the subject names it gives,
+    and keep what validation accepts. Writes nothing."""
     answers, issues = parse_answer(raw, batch)
     names = subject_names_to_resolve(batch, answers)
     resolved = await store.resolve_subjects(names, batch) if names else {}
@@ -101,6 +106,21 @@ async def structure_batch(
     )
     result.issues[:0] = issues
     return result
+
+
+async def structure_batch(
+    batch: Batch,
+    store: Store,
+    model: StructuringModel,
+    *,
+    prompt_version: str,
+    run_keys: frozenset[tuple[UUID, str]] = frozenset(),
+    run_subjects: dict[UUID, Entity] | None = None,
+) -> BatchResult:
+    """One call: render with the catalog as it stands, ask, validate. Raises on a failed call."""
+    subjects, catalog = await candidate_catalog(batch, store, run_subjects)
+    raw = await model.answer(prompt(), render(batch, catalog, subjects))
+    return await settle_answer(batch, raw, catalog, store, model, prompt_version=prompt_version, run_keys=run_keys)
 
 
 async def structure(

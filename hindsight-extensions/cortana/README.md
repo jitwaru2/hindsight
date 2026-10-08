@@ -43,7 +43,8 @@ declarations; the separate worker (`hindsight-worker`) needs the same variables 
 | `retrievals` | the retrieval log: rows built from the recall and reflect hooks, the write, the retention sweep and the query behind `GET /ext/cortana/retrievals` |
 | `status` | `build_status`, behind `GET /ext/cortana/status` and `hindsight-cortana status` |
 | `reconcile` | `after_retain` (the hook's work after structuring) and `reconcile` for a subject, a document or the bank, with the orphan sweep |
-| `gate` | the latency measurement and its budget (`latency`, `latency_budget.json`, `synthetic`; HSIGHT-9); the rest is filled by HSIGHT-8 |
+| `gate` | the evaluation gate (HSIGHT-8): the runner (`runner`), the strict scorer (`strict`), the questions generated from the ledger (`questions`), the reflect judge (`judge`) and the acceptance run (`acceptance`); and the latency measurement and its budget (`latency`, `latency_budget.json`, `synthetic`; HSIGHT-9) |
+| `migrate` | the migration's resumable structuring pass behind `hindsight-cortana migrate structure` (specification 13.4 step 4; HSIGHT-8) |
 | `cli` | `hindsight-cortana` |
 | `verify_base` | the base check behind `hindsight-cortana verify-base` |
 
@@ -225,8 +226,8 @@ whole-bank `reconcile` deletes the bank's older rows; `hindsight-cortana retriev
   is an entity id or an exact name, and subject, attribute and document must hold for one claim
 - `GET /ext/cortana/status?bank_id=`: migrations and tables; facts without claims and pending
   structuring; unaligned claims, pending keys, conflicts and stale-document markers; the last
-  reconciliation that changed something; `gate` (null until HSIGHT-8 records gate runs, shape
-  `status.GateRun`); fact retirements and restorations in the last day; the worker (in-process or
+  reconciliation that changed something; `gate` (the newest summary `hindsight-cortana gate` wrote to
+  the operating folder's `ranking/`, shape `status.GateRun`, or null); fact retirements and restorations in the last day; the worker (in-process or
   separate, the separate worker's liveness probe on `HINDSIGHT_API_WORKER_HTTP_PORT`, and the
   operation queue); the retrieval log's rows and any past retention; and the check that `~/.env`
   holds no `HINDSIGHT_` key. `problems` lists whatever is out of order.
@@ -280,7 +281,58 @@ load that was not running for the required share of probes. `--out` writes every
 
 **The budget** is versioned with the package: `latency_budget.json` holds the ceilings, the sample
 counts, the load's settings, the reason for each and the measurements they were set from. A change
-to it is a release (specification 11). HSIGHT-8 runs the command from `hindsight-cortana gate`.
+to it is a release (specification 11). `hindsight-cortana gate` runs the same measurement as its
+latency suite.
+
+## The migration's structuring pass
+
+`hindsight-cortana migrate structure --bank <id>` structures every valid world and experience fact
+that has no claims and that no structuring call has answered (specification 13.4 step 4), document by
+document in statement-time order, each document in the structuring batches with the source hints its
+retain recorded (`documents.retain_params`: event date, context). Legacy compound facts receive
+several claims; nothing is re-extracted. Then `hindsight-cortana reconcile --bank <id> --all` aligns
+pending keys and applies supersession.
+
+- **Resumable.** Each call's `structured` ledger row is its progress; rerun the same command to
+  continue. The pass writes `structure-pass-started` and `structure-pass-finished` or
+  `structure-pass-stopped` (actor `operator`) with its counts, and holds a per-bank advisory lock, so a
+  second pass on the same bank refuses to start. Stop it with SIGTERM: a batch is written in one
+  transaction, so a call in flight is simply asked again next time.
+- **Priority.** `--priority-subjects <file>` takes a JSON list of case-insensitive regular expressions;
+  documents with a fact whose text or entity names match go first, whole. `--phase priority|rest|all`.
+- **Concurrency.** `--concurrency` documents in flight (default `migrate.DEFAULT_CONCURRENCY`, set from
+  the rehearsal's measurement). Answers are validated and written one at a time against the catalog as
+  it stands then, so a key another document created meanwhile is joined or, under a new name, left
+  pending for alignment.
+- **Failures.** A failed call is retried with a doubling backoff (`--retries`, `--backoff`), then its
+  facts are left `structuring-pending` for the next run. A usage limit stops the pass at once; so does a
+  run of failed calls (`--max-consecutive-failures`). `--progress-file` appends a line per call with
+  the facts per hour and the projected time left; `--plan-only` prints what is left.
+
+## The gate
+
+`hindsight-cortana gate --bank <id> --url <server>` runs the evaluation gate of specification 11 and
+exits 0 only when every suite ran and passed:
+
+1. **deterministic**: this package's tests (`pytest`, no model calls), from a checkout;
+2. **structuring**: the structuring suite on the real fixtures (`HINDSIGHT_CORTANA_REAL_FIXTURES`);
+3. **acceptance**: the ten questions of the operating folder's questions file, scored against its answer
+   keys by the strict scorer, three ways each: the current-state read (starting from the question's
+   subjects in `ranking/acceptance-subjects.json`), plain recall (first result; loose and strict), and
+   reflect judged by a model with the key's patterns as rubric; then questions generated from the
+   ledger, one per key superseded in the window (default: since the newest earlier gate run on the
+   bank; `--since`, `--all-supersessions`), read and recalled all, reflected on a seeded sample
+   (`--reflect-sample`). Hard criteria: the read and reflect; recall is measured, and its failure means
+   HSIGHT-11 before cut-over (specification 16 item 8);
+4. **latency**: the HSIGHT-9 measurement against `latency_budget.json`.
+
+`--suites` selects a subset. Each run writes `gate-<time>.md` (the table, also printed) and
+`gate-<time>.json` (the summary, every result included) to `$HINDSIGHT_CORTANA_GATE_DIR`, else
+`~/.cortana-legacy/hindsight/ranking/`; `status.gate` reports the newest. The questions, keys, subjects
+and fixtures are real data and stay in the operating folder, never in this repository
+(`HINDSIGHT_CORTANA_ACCEPTANCE_QUESTIONS`, `..._KEYS`, `..._SUBJECTS` move them). The acceptance run
+reads the ledger through the engine, so source the profile of the server's database first, as for
+`reconcile`.
 
 ## Tests
 
