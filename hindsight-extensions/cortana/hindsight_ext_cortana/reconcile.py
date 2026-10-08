@@ -119,16 +119,23 @@ async def reconcile(
     actor: str = "reconciliation",
     structuring_model: Any = None,
     alignment_model: AlignmentModel | None = None,
+    structure: bool = True,
 ) -> ReconcileReport:
-    """Reconcile one subject, one document, or (neither given) the whole bank."""
+    """Reconcile one subject, one document, or (neither given) the whole bank.
+
+    ``structure=False`` skips step 1 and leaves facts without claims to the migration's concurrent pass
+    (``migrate structure``): a whole-bank reconciliation between the pass's phases would otherwise
+    structure the remaining phase itself, one call at a time."""
     if subject is not None and document is not None:
         raise ValueError("reconcile a subject or a document, not both")
     run_id = uuid.uuid4()
     scope = {"subject": str(subject)} if subject else ({"document": document} if document else {"bank": bank_id})
     pool = await engine._get_pool()
 
-    async with pool.acquire() as conn:
-        todo = await unstructured_facts(conn, bank_id, subject=subject, document=document)
+    todo: list[UUID] = []
+    if structure:
+        async with pool.acquire() as conn:
+            todo = await unstructured_facts(conn, bank_id, subject=subject, document=document)
     structured = None
     if todo:
         structured = await structure_facts(engine, bank_id, todo, request_context, actor=actor, model=structuring_model)

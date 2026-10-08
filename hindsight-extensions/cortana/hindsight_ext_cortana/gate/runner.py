@@ -89,6 +89,14 @@ def release() -> str | None:
 SUMMARY_LINE = re.compile(r"(\d+) (passed|failed|errors?|skipped|deselected|xfailed|xpassed)")
 
 
+def test_environment() -> dict[str, str]:
+    """The environment for suite 1: the operator's, without any ``HINDSIGHT_`` setting or database
+    password. The gate runs with a server's profile sourced (for the acceptance run), and the suite
+    would otherwise take that profile's database URL and model provider over its own embedded
+    database and mock provider."""
+    return {k: v for k, v in os.environ.items() if not k.startswith("HINDSIGHT_") and k != "PGPASSWORD"}
+
+
 def run_deterministic() -> SuiteResult:
     """Suite 1: the package's tests, no model calls (the engine's mock provider and embedded database)."""
     tests = package_dir() / "tests"
@@ -99,6 +107,7 @@ def run_deterministic() -> SuiteResult:
         cwd=package_dir(),
         capture_output=True,
         text=True,
+        env=test_environment(),
     )
     tail = [line for line in done.stdout.splitlines() if line.strip()][-1:] or [""]
     counts = {kind: int(n) for n, kind in SUMMARY_LINE.findall(tail[0])}
@@ -303,5 +312,6 @@ __all__ = [
     "release",
     "render_table",
     "run_deterministic",
+    "test_environment",
     "write",
 ]

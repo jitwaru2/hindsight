@@ -166,6 +166,9 @@ def reconcile_command(
     subject: Annotated[str | None, typer.Option(help="one subject: entity id or exact name")] = None,
     document: Annotated[str | None, typer.Option(help="one document id")] = None,
     all_: Annotated[bool, typer.Option("--all", help="the whole bank")] = False,
+    skip_structuring: Annotated[
+        bool, typer.Option(help="align and settle only; leave facts without claims to `migrate structure`")
+    ] = False,
 ) -> None:
     """Recompute supersession from the claims and the facts' states (specification 6.4).
 
@@ -178,7 +181,14 @@ def reconcile_command(
 
     async def work(engine: Any) -> dict:
         subject_id = await _subject_id(engine, bank, subject) if subject else None
-        report = await reconcile(engine, bank, subject=subject_id, document=document, request_context=_context())
+        report = await reconcile(
+            engine,
+            bank,
+            subject=subject_id,
+            document=document,
+            request_context=_context(),
+            structure=not skip_structuring,
+        )
         return report.summary()
 
     typer.echo(json.dumps(asyncio.run(_with_engine(work)), indent=1, default=str))

@@ -384,8 +384,19 @@ def test_the_deterministic_suite_reads_pytests_summary(monkeypatch):
         returncode = 1
         stdout = "FAILED tests/test_x.py::test_y - boom\n==== 1 failed, 200 passed, 3 warnings in 9.1s ====\n"
 
-    monkeypatch.setattr(runner.subprocess, "run", lambda *a, **k: Done())
+    seen = {}
+
+    def run(*args, **kwargs):
+        seen.update(kwargs)
+        return Done()
+
+    monkeypatch.setenv("HINDSIGHT_API_DATABASE_URL", "postgresql://somewhere/else")
+    monkeypatch.setenv("HINDSIGHT_API_LLM_PROVIDER", "claude-code")
+    monkeypatch.setenv("PGPASSWORD", "secret")
+    monkeypatch.setattr(runner.subprocess, "run", run)
     result = runner.run_deterministic()
+    assert not any(k.startswith("HINDSIGHT_") for k in seen["env"]) and "PGPASSWORD" not in seen["env"]
+    assert seen["env"]["PATH"]
     assert result.ran and not result.passed
     assert result.summary["failed"] == 1 and result.summary["passed"] == 200
     assert result.summary["failures"] == ["FAILED tests/test_x.py::test_y - boom"]

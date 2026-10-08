@@ -225,3 +225,18 @@ async def test_a_second_pass_on_the_same_bank_refuses_to_start(structuring_calls
         await holder.execute("SELECT pg_advisory_unlock(hashtext($1))", migrate.PASS_LOCK + bank)
     assert structuring_calls["calls"] == []
     assert (await _pass(cortana_memory, bank).run()).stopped is None
+
+
+async def test_reconciliation_can_leave_structuring_to_the_pass(
+    structuring_calls, cortana_client, cortana_memory, conn
+):
+    from hindsight_ext_cortana.reconcile import reconcile
+
+    bank = f"cortana-migrate-{uuid.uuid4().hex[:8]}"
+    await _seed(cortana_client, structuring_calls, bank, [(str(uuid.uuid4()), EARLY, "Alex", "fence")])
+    todo = await unstructured_facts(conn, bank)
+
+    report = await reconcile(cortana_memory, bank, request_context=RequestContext(internal=True), structure=False)
+
+    assert report.structured is None and structuring_calls["calls"] == []
+    assert await unstructured_facts(conn, bank) == todo
