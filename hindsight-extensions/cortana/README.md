@@ -43,7 +43,7 @@ declarations; the separate worker (`hindsight-worker`) needs the same variables 
 | `retrievals` | the retrieval log: rows built from the recall and reflect hooks, the write, the retention sweep and the query behind `GET /ext/cortana/retrievals` |
 | `status` | `build_status`, behind `GET /ext/cortana/status` and `hindsight-cortana status` |
 | `reconcile` | `after_retain` (the hook's work after structuring) and `reconcile` for a subject, a document or the bank, with the orphan sweep |
-| `gate` | filled by HSIGHT-8 |
+| `gate` | the latency measurement and its budget (`latency`, `latency_budget.json`, `synthetic`; HSIGHT-9); the rest is filled by HSIGHT-8 |
 | `cli` | `hindsight-cortana` |
 | `verify_base` | the base check behind `hindsight-cortana verify-base` |
 
@@ -242,6 +242,45 @@ in its `audit_log` table, read through `GET /v1/default/banks/<bank>/audit-logs`
 **Diagnosing a wrong answer:** find the reflect in `/ext/cortana/retrievals?kind=reflect`, read its
 tool calls and cited ids (and its recalls' scores with `reflect_id=`), look up each cited fact, and
 read `/ext/cortana/ledger?fact_id=` or `?subject=&attribute=` for its key.
+
+## Performance isolation and the latency budget
+
+Specification section 14 and acceptance criterion 13, built by HSIGHT-9.
+
+**The worker arrangement** is configuration plus one launchd job. The API runs with
+`HINDSIGHT_API_WORKER_ENABLED=false`; the engine's `hindsight-worker`, started by
+`~/.cortana-legacy/hindsight/launchd/start-worker.sh` (launchd job
+`com.jitwaru2.hindsight-worker`) from the same profile, runs consolidation, mental-model refreshes
+and asynchronous retains, including this package's structuring, alignment and supersession, with
+its own reranker threads and recall semaphore. Live recall and reflect stay in the API. Our hooks
+run in whichever process does the work: `on_retain_complete` in the worker, `on_recall_complete`
+and `on_reflect_complete` in the API for live calls and in the worker for consolidation's and
+refreshes' internal recalls. `HINDSIGHT_API_WORKER_HTTP_PORT` in the profile is the worker's
+liveness port; the status route probes it.
+
+**The measurement.** `hindsight-cortana latency --bank <id> [--url <server>]` times live recall
+and reflect over HTTP, one call at a time after a few warm-up recalls, first with no background
+work and then while a retain and a consolidation run, and checks the 50th and 95th percentiles
+against `hindsight_ext_cortana/gate/latency_budget.json`. It exits 1 on any breach: a percentile
+over its ceiling, recall p95 under load over its allowed multiple of idle p95, a failed call, or
+load that was not running for the required share of probes. `--out` writes every sample.
+
+- Queries come from the bank (fact texts for recall, its most-mentioned entities for reflect)
+  unless `--queries` names a JSON file with `recall` and `reflect` lists.
+- The load runs on a separate synthetic bank, `<bank>-load` unless `--load-bank` names another,
+  so the measured bank is never changed; the contention measured is the server's (reranker
+  threads, recall semaphore, database pool, CPU). The command applies the atomic extraction
+  instructions and auto-consolidation to the load bank, triggers a consolidation, keeps one
+  asynchronous retain of a multi-chunk synthetic document in flight, starts probing once both are
+  running, records at every probe whether they still are, and cancels what is left on the load
+  bank when it finishes. A load bank holding unconsolidated facts gives consolidation work from
+  the first probe; an empty one waits for the first retain to finish.
+- The recall probe is the engine's default recall (all fact types, `mid` budget, 4,096 tokens),
+  which reranks the full candidate set; the reflect probe is the engine's default reflect.
+
+**The budget** is versioned with the package: `latency_budget.json` holds the ceilings, the sample
+counts, the load's settings, the reason for each and the measurements they were set from. A change
+to it is a release (specification 11). HSIGHT-8 runs the command from `hindsight-cortana gate`.
 
 ## Tests
 

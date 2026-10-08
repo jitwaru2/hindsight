@@ -1,8 +1,10 @@
 """``hindsight-cortana``: the operator's command for this package.
 
 ``verify-base``, ``suite structuring`` (HSIGHT-4), ``reconcile``, ``merge`` and ``unmerge``
-(HSIGHT-5), and ``status`` and ``retrievals sweep`` (HSIGHT-7) are here. ``gate`` (HSIGHT-8) is
-added by the issue that builds it.
+(HSIGHT-5), ``status`` and ``retrievals sweep`` (HSIGHT-7), and ``latency`` (HSIGHT-9) are here.
+``gate`` (HSIGHT-8) is added by the issue that builds it.
+
+``latency`` talks to a running server over HTTP; it does not open the engine.
 
 ``reconcile``, ``merge``, ``unmerge``, ``status`` and ``retrievals sweep`` open the engine in this process the way the engine's
 ``hindsight-worker`` does: from the ``HINDSIGHT_API_*`` environment (source the profile first),
@@ -270,3 +272,75 @@ def retrievals_sweep_command(
         return {"bank": bank, "retention_days": retention, "deleted": deleted}
 
     typer.echo(json.dumps(asyncio.run(_with_engine(work)), indent=1))
+
+
+@app.command("latency")
+def latency_command(
+    bank: Annotated[str, typer.Option(help="the bank whose recall and reflect are timed")],
+    url: Annotated[
+        str | None, typer.Option(help="the server; default http://127.0.0.1:$HINDSIGHT_API_PORT (8888 when unset)")
+    ] = None,
+    load_bank: Annotated[
+        str | None, typer.Option(help="the synthetic bank that carries the background load; default <bank>-load")
+    ] = None,
+    idle: Annotated[bool, typer.Option(help="measure with no background load first")] = True,
+    load: Annotated[bool, typer.Option(help="measure while a retain and a consolidation run")] = True,
+    queries: Annotated[
+        Path | None, typer.Option(help='JSON {"recall": [...], "reflect": [...]}; default: drawn from the bank')
+    ] = None,
+    budget: Annotated[
+        Path | None, typer.Option(help="a budget file; default the package's latency_budget.json")
+    ] = None,
+    out: Annotated[Path | None, typer.Option(help="write the full report, every sample included, as JSON")] = None,
+) -> None:
+    """Time live recall and reflect, idle and while a retain and a consolidation run, and check the
+    50th and 95th percentiles against the recorded budget (specification 14; criterion 13).
+
+    The load runs on a separate synthetic bank, so the measured bank is not changed. Exits 0 within
+    the budget, 1 on any breach, including a failed call or load that was not running throughout.
+    """
+    import os
+
+    import httpx
+    from rich.console import Console
+    from rich.table import Table
+
+    from .gate import latency
+
+    spec = latency.load_budget(budget)
+    base = url or f"http://127.0.0.1:{os.environ.get('HINDSIGHT_API_PORT', '8888')}"
+
+    async def work() -> latency.Report:
+        async with httpx.AsyncClient(base_url=base, timeout=600) as client:
+            return await latency.measure(
+                client,
+                bank,
+                spec,
+                idle=idle,
+                load_bank=(load_bank or f"{bank}-load") if load else None,
+                queries=latency.read_queries(queries) if queries else None,
+            )
+
+    report = asyncio.run(work())
+    if out:
+        out.write_text(report.model_dump_json(indent=1))
+    table = Table(title=f"latency on {bank} at {base}, budget version {spec.version}")
+    for column in ("phase", "call", "n", "errors", "p50 ms", "p95 ms", "max ms", "load running"):
+        table.add_column(column)
+    for phase in report.phases:
+        for kind in ("recall", "reflect"):
+            s = getattr(phase, kind)
+            share = "" if phase.load_present is None else f"{phase.load_present:.0%}"
+            table.add_row(
+                phase.name, kind, str(s.count), str(s.errors), str(s.p50_ms), str(s.p95_ms), str(s.max_ms), share
+            )
+    console = Console()
+    console.print(table)
+    console.print(
+        f"budget under load: recall p50 {spec.recall.p50_ms} / p95 {spec.recall.p95_ms} ms, reflect p50 "
+        f"{spec.reflect.p50_ms} / p95 {spec.reflect.p95_ms} ms, recall p95 at most {spec.recall_p95_over_idle} times idle"
+    )
+    for breach in report.breaches:
+        console.print(f"BREACH {breach}")
+    console.print("within budget" if report.ok else "over budget")
+    raise typer.Exit(0 if report.ok else 1)

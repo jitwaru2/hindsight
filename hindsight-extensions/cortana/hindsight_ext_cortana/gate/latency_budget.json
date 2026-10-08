@@ -1,0 +1,22 @@
+{
+ "version": 1,
+ "recorded": "2026-10-07",
+ "reason": "Set by HSIGHT-9 from the separate-worker measurements on the scratch server (worktree code, Apple M4 Pro, 14 cores, 48 GB, reranker and embeddings on CPU, claude-code provider with claude-sonnet-5-5), measured bank scratch-hsight-9-latency (2,400 synthetic one-sentence facts; every recall reranks the full 300 candidates), load bank scratch-hsight-9-load. The ceilings hold for that bank: a bank with longer facts reranks more slowly, so measuring another bank (for example one restored from the daily dump) means re-measuring its idle percentiles and raising the version. Recall: the ceilings are 1.5 times the measured idle percentiles (idle p50 329 to 338 ms and p95 360 to 362 ms on clean runs), the headroom specification 14 allows for the machine's own noise; under load with the separate worker recall p50 was 321 to 330 ms and p95 361 to 365 ms, no different from idle, while with background work in the API process recall p95 rose 12 to 18 percent (407 and 425 ms), which these ceilings also admit: at today's load (no judge) the separation's measured gain is small, and its value is that background recall cannot queue live recall behind the API's four reranker threads and recall semaphore, as the judge's did on 2026-10-07 (single recalls of 64 to 67 seconds). The same-run ratio catches contention independently of the bank's size. Reflect: its wall time is the model provider's; across all runs reflect p50 ranged 15 to 31 s and p95 29 to 77 s (one call took 96 s) with no relation to background load, so reflect has ceilings only, about 1.5 times the worst measured p50 and p95, far below the plugin's reflect tool timeout of 330 s, and no ratio.",
+ "recalls": 30,
+ "reflects": 10,
+ "warmup_recalls": 3,
+ "recall": {"p50_ms": 500, "p95_ms": 550},
+ "reflect": {"p50_ms": 45000, "p95_ms": 120000},
+ "recall_p95_over_idle": 1.5,
+ "load": {"document_chunks": 4, "wait_timeout_s": 600, "min_present_fraction": 0.9},
+ "measurements": {
+  "samples": "30 recalls and 10 reflects per phase, one at a time, after 3 warm-up recalls: the specification's minimum; with 30 samples the inclusive p95 sits between the two slowest calls, and the warm-up keeps first-call model loading out of the sample",
+  "load": "4 extraction chunks (12,600 characters), which the atomic extraction instructions turned into 179 to 221 facts and 182 to 221 claims through 4 structuring calls per retain, a retain of about two minutes and a heavy save by session standards; consolidation ran over an unconsolidated backlog in three pools throughout every load phase. The load was running at 100 percent of probes in every run; 0.9 tolerates a probe landing between one retain and the next. 600 s covers a full retain when the load bank has no backlog and consolidation waits for it",
+  "runs": {
+   "run1 in-process": {"idle_recall_ms": [338.2, 362.3], "load_recall_ms": [347.2, 406.9], "idle_reflect_ms": [15228.1, 33184.2], "load_reflect_ms": [17782.0, 28710.9], "note": "p50 and p95; leftover consolidation from a smoke run ran in the first 30 s of idle"},
+   "run2 separate": {"idle_recall_ms": [335.2, 397.0], "load_recall_ms": [330.2, 365.2], "idle_reflect_ms": [30723.6, 77328.8], "load_reflect_ms": [24365.9, 32235.2], "note": "idle had consolidation running in the worker, left over from run 1"},
+   "run3 in-process": {"idle_recall_ms": [329.1, 359.6], "load_recall_ms": [337.5, 424.7], "idle_reflect_ms": [23706.6, 51206.5], "load_reflect_ms": [14639.8, 36116.4], "note": "clean"},
+   "run4 separate": {"idle_recall_ms": [334.4, 361.2], "load_recall_ms": [320.7, 360.6], "idle_reflect_ms": [20944.8, 30247.9], "load_reflect_ms": [23180.7, 32371.9], "note": "idle had consolidation running in the worker, left over from run 3"}
+  }
+ }
+}
