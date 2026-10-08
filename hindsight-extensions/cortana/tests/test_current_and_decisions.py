@@ -184,6 +184,7 @@ async def test_criterion_2_a_decision_is_current_within_the_call_supersedes_and_
         ("east", "session", "S1"),
     ]
     assert f'Josh\'s words: "{words}"' in key["summary"]
+    assert 'previous position "east" (session, 2026-09-25 10:00 EDT)' in key["summary"]
 
 
 async def test_a_decision_on_a_new_key_of_a_known_subject_is_pending_alignment(model, cortana_client, conn):

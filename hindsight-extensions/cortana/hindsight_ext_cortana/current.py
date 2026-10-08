@@ -36,7 +36,7 @@ from zoneinfo import ZoneInfo
 from hindsight_api.engine.schema import fq_table_explicit
 from pydantic import BaseModel
 
-from .rules import is_rule_retirement
+from .rules import is_rule_retirement, same_value
 from .structuring.engine import PgStore
 from .structuring.names import normalize_name
 from .structuring.validation import normalize_key
@@ -335,11 +335,22 @@ def _key_summary(view: KeyView) -> str:
     for stale in view.stale_documents:
         says = f' still says "{stale.says.value}"' if stale.says else " still says otherwise"
         line += f"; document {stale.document_id}{says}"
-    replaced = [c for c in view.history if c.state == "superseded"]
-    if replaced:
-        line += f"; replaces {said(replaced[0])}"
-        if len(replaced) > 1:
-            line += f" and {len(replaced) - 1} earlier"
+    if view.current is not None:
+        previous = next(
+            (
+                c
+                for c in view.history
+                if c.state == "superseded"
+                and not c.provisional
+                and c.stated_at <= view.current.stated_at
+                and not same_value(c.value, view.current.value)
+            ),
+            None,
+        )
+        if previous is not None:
+            line += f"; previous position {said(previous)}"
+    if view.history:
+        line += f"; {len(view.history)} superseded in history"
     return line
 
 
